@@ -33,6 +33,15 @@ void HiHat::Play(const uint8_t voice, const uint32_t noteOffset, uint32_t noteRa
 	const float open = std::sqrt((static_cast<float>(noteOffset) + 1.0f) / noteRange) + pot - 0.5f;
 	decayScale = std::min(config.decayMin + (config.decayRange * open), config.decayMax);
 
+	if (engine != classic) {
+		// Plaits hats: open amount (-0.41 closed .. 1.5 fully open) mapped onto Plaits decay
+		morph = std::clamp(0.25f + 0.5f * open, 0.0f, 1.0f);
+		f0 = std::min(config.pitch * pitch / systemSampleRate, 0.1f);
+		accent = std::clamp(velocity, 0.0f, 1.0f);
+		trigger = true;
+		return;
+	}
+
 	// Ring modulated metallic layer fades in on open hats only, closed hats stay crisp
 	const float ringAmt = (open - config.ringModOpenStart) / (1.0f - config.ringModOpenStart);
 	ringLevel = config.ringModLevel * std::clamp(ringAmt, 0.0f, 1.0f);
@@ -56,6 +65,40 @@ void HiHat::Play(const uint8_t voice, const uint32_t index)
 
 
 void HiHat::CalcOutput()
+{
+	if (engine == classic) {
+		CalcClassic();
+		return;
+	}
+
+	float out = 0.0f, temp1 = 0.0f, temp2 = 0.0f;
+	if (engine == square808) {
+		hat808.Render(false, trigger, accent, f0, config.tone, morph, config.noisiness, &temp1, &temp2, &out, 1);
+	} else {
+		hat909.Render(false, trigger, accent, f0, config.tone, morph, config.noisiness, &temp1, &temp2, &out, 1);
+	}
+	trigger = false;
+
+	const float level = static_cast<float>(ADC_array[ADC_HiHatLevel]) / 32768.0f;
+	outputLevel[0] = outputLevel[1] = level * out;
+	ledEnv = std::max(std::abs(out) * 2.0f, ledEnv * 0.9995f);
+	noteMapper->pwmLed.Level(std::min(ledEnv, 1.0f));
+}
+
+
+void HiHat::SetEngine(const uint8_t e)
+{
+	engine = static_cast<Engine>(e < engineCount ? e : 0);
+	config.engine = engine;
+	hat808.Init();
+	hat909.Init();
+	playing = (engine != classic);
+	trigger = false;
+	outputLevel[0] = outputLevel[1] = 0.0f;
+}
+
+
+void HiHat::CalcClassic()
 {
 	if (playing) {
 
@@ -149,6 +192,7 @@ void HiHat::UpdateFilter()
 
 uint32_t HiHat::SerialiseConfig(uint8_t** buff, const uint8_t voiceIndex)
 {
+	config.engine = engine;
 	*buff = reinterpret_cast<uint8_t*>(&config);
 	return sizeof(config);
 }
@@ -165,6 +209,11 @@ void HiHat::StoreConfig(uint8_t* buff, const uint32_t len)
 		partialPeriod[i] = freqToSqPeriod / config.partialFreq[i];
 	}
 	config.gritHold = std::max(config.gritHold, 1.0f);
+
+	const uint8_t e = static_cast<uint8_t>(std::clamp(config.engine, 0.0f, static_cast<float>(engineCount - 1)));
+	if (buff == nullptr || e != engine) {
+		SetEngine(e);
+	}
 }
 
 

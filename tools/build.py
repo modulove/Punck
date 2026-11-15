@@ -21,7 +21,8 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 PROJ = os.path.join(ROOT, "Punck")
 BUILD = os.path.join(ROOT, "build")
 
-SRC_DIRS = ["src", "src/usb", "src/voices", "src/dsp", "Drivers/FatFs/src"]
+SRC_DIRS = ["src", "src/usb", "src/voices", "src/dsp", "Drivers/FatFs/src",
+            "src/third_party/stmlib/dsp", "src/third_party/stmlib/utils", "src/third_party/plaits"]
 INC_DIRS = ["Drivers/CMSIS/Include", "Drivers/CMSIS/Device/ST/STM32H7xx/Include", "src", "src/usb",
             "src/voices", "src/dsp", "Drivers/FatFs/src", "src/third_party"]
 DEFINES = ["STM32H743xx", "DEBUG"]
@@ -58,7 +59,7 @@ EXCLUDE = {"sysmem.c", "SerialHandler.cpp", "USB_bu.cpp", "sdram_diskio.cpp", "t
 def sources():
     out = []
     for d in SRC_DIRS:
-        for ext in ("*.c", "*.cpp", "*.s", "*.S"):
+        for ext in ("*.c", "*.cpp", "*.cc", "*.s", "*.S"):
             out += [f for f in glob.glob(os.path.join(PROJ, d, ext)) if os.path.basename(f) not in EXCLUDE]
     return sorted(set(os.path.normcase(f) for f in out))     # Windows globs are case-insensitive
 
@@ -85,7 +86,7 @@ def compile_one(tc, src, extra_defs):
     os.makedirs(os.path.dirname(obj), exist_ok=True)
     incs = ["-I" + os.path.join(PROJ, i) for i in INC_DIRS]
     defs = ["-D" + d for d in DEFINES + extra_defs]
-    if src.endswith(".cpp"):
+    if src.endswith((".cpp", ".cc")):
         cmd = [os.path.join(tc, "arm-none-eabi-g++")] + COMMON + CXXFLAGS
     elif src.endswith((".s", ".S")):
         cmd = [os.path.join(tc, "arm-none-eabi-gcc")] + CPU + ["-x", "assembler-with-cpp", "-g3"]

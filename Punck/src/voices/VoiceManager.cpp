@@ -172,6 +172,7 @@ void VoiceManager::Output()
 #endif
 		}
 	}
+	ShowBlinks();									// After CalcOutput so the engine blink overrides the voice LEDs
 }
 
 
@@ -188,6 +189,14 @@ float VoiceManager::FastTanh(const float x)
 void VoiceManager::KickTriggered(const float velocity)
 {
 	// Called from Kick::Play (always in the audio interrupt): softer kicks duck less
+	const uint32_t now = sampleClock;
+	const float interval = static_cast<float>(now - lastKickSample);
+	lastKickSample = now;
+	if (interval > 0.25f * systemSampleRate && interval < 2.0f * systemSampleRate) {
+		kickIntervalSamples = interval;
+	} else if (interval >= 2.0f * systemSampleRate) {
+		kickIntervalSamples = 0.0f;
+	}
 	duckTarget = std::max(duckTarget, std::clamp(velocity, 0.0f, 1.0f));
 	duckHold = static_cast<uint32_t>(mixConfig.duckHoldMs * 0.001f * systemSampleRate);
 }
@@ -333,6 +342,10 @@ void VoiceManager::CheckButtons()
 				} else if (buttonMode == ButtonMode::playNote || triggerType != NoteMapper::TriggerType::triggerBtn) {
 					// Trigger input only used to play notes; Trigger 2 currently only used for open hihat
 					note.drumVoice->Play(note.voiceIndex, triggerType == NoteMapper::TriggerType::trigger2 ? 128 : 0);
+					if (buttonMode == ButtonMode::playNote && (triggerType & NoteMapper::TriggerType::triggerBtn)) {
+						pressActive[note.voice] = true;						// Start timing for long press engine switch
+						pressStart[note.voice] = SysTickVal;
+					}
 
 				} else if (buttonMode == ButtonMode::drumPattern) {
 					if (sequencer.IsEmpty(note.voice)) {
@@ -345,8 +358,66 @@ void VoiceManager::CheckButtons()
 		} else {
 			note.trigger.buttonOn = false;
 		}
+		CheckLongPress(note);
 	}
 
+}
+
+
+void VoiceManager::CheckLongPress(NoteMapper& note)
+{
+	// Holding a voice button for longPressMs switches to the next sound engine; LED blinks the engine number
+	const uint8_t v = note.voice;
+	if (!pressActive[v]) {
+		return;
+	}
+	if (!note.trigger.ButtonHeld() || buttonMode != ButtonMode::playNote) {
+		pressActive[v] = false;
+		return;
+	}
+	if (SysTickVal - pressStart[v] >= longPressMs) {
+		pressActive[v] = false;
+		DrumVoice* dv = note.drumVoice;
+		if (dv != nullptr && note.voiceIndex == 0 && dv->EngineCount() > 1) {
+			const uint8_t next = (dv->GetEngine() + 1) % dv->EngineCount();
+			dv->SetEngine(next);
+			blinkCount[v] = next + 1;
+			blinkStart[v] = SysTickVal;
+		}
+	}
+}
+
+
+void VoiceManager::ShowBlinks()
+{
+	// Overrides the voice LED while showing the engine number: 120 ms on / 140 ms off per blink, then a preview hit
+	for (auto& nm : noteMapper) {
+		const uint8_t v = nm.voice;
+		if (blinkCount[v] == 0 || nm.pwmLed.timerChannel == nullptr) {
+			continue;
+		}
+		const uint32_t elapsed = SysTickVal - blinkStart[v];
+		if (elapsed >= blinkCount[v] * 260u) {
+			blinkCount[v] = 0;
+			nm.pwmLed.Level(0.0f);
+			nm.drumVoice->Play(nm.voiceIndex, 0);				// Preview the new engine
+		} else {
+			nm.pwmLed.Level((elapsed % 260u) < 120u ? 1.0f : 0.0f);
+		}
+	}
+}
+
+
+float VoiceManager::SixteenthSamples()
+{
+	if (clockTickSamples > 0.0f && (sampleClock - lastClockSample) < systemSampleRate / 2) {
+		return clockTickSamples * 6.0f;											// MIDI clock: 6 ticks per 16th
+	}
+	const float seq = sequencer.SixteenthSamples();
+	if (seq > 0.0f) {
+		return seq;
+	}
+	return kickIntervalSamples / 4.0f;											// Quarter note kicks -> 16ths (0 if unknown)
 }
 
 

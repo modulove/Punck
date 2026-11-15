@@ -3,10 +3,13 @@
 #include "Filter.h"
 #include "BPFilter.h"
 #include "DrumVoice.h"
+#include "plaits/dsp/drums/hi_hat.h"
 
 class NoteMapper;
 class HiHat  : public DrumVoice {
 public:
+	enum Engine : uint8_t {classic = 0, square808, ringMod909, engineCount};
+
 	void Play(const uint8_t voice, const uint32_t noteOffset, uint32_t noteRange, const float velocity, const float pitch);
 	void Play(const uint8_t voice, const uint32_t index);
 	void CalcOutput();
@@ -14,10 +17,25 @@ public:
 	uint32_t SerialiseConfig(uint8_t** buff, const uint8_t voiceIndex);
 	void StoreConfig(uint8_t* buff, const uint32_t len);
 	uint32_t ConfigSize();
+	uint8_t EngineCount() override { return engineCount; }
+	uint8_t GetEngine() override { return engine; }
+	void SetEngine(const uint8_t e) override;
 
 	NoteMapper* noteMapper;
 
 private:
+	void CalcClassic();
+
+	// Plaits hi-hats (Mutable Instruments, MIT): 808-ish square noise and 909-ish ring modulated noise
+	Engine engine = square808;
+	plaits::HiHat<plaits::SquareNoise, plaits::SwingVCA, true, false> hat808;
+	plaits::HiHat<plaits::RingModNoise, plaits::LinearVCA, false, true> hat909;
+	bool trigger = false;
+	float accent = 0.8f;
+	float f0 = 0.008f;
+	float morph = 0.3f;						// Plaits decay for the current hit
+	float ledEnv = 0.0f;
+
 	// Float fields first: the web editor edits the config as a flat list of floats (new fields appended)
 	struct Config {
 		float attackInc = 0.005f;			// Attack envelope speed
@@ -50,6 +68,12 @@ private:
 
 		// Frequency modulation - amount by which partial 0 frequency modulates other partials
 		uint8_t partialFM[6] = {0, 8, 1, 6, 1, 0};
+
+		// Engines (after partialFM so blocks saved by earlier modulove firmware still load correctly)
+		float engine = 1.0f;				// 0 classic metallic, 1 808-style square noise, 2 909-style ring mod noise
+		float pitch = 400.0f;				// Base frequency (Hz) of the Plaits hats' metallic oscillators
+		float tone = 0.6f;					// Plaits 'timbre' (filter brightness)
+		float noisiness = 0.35f;			// Plaits 'harmonics': metallic -> noisy
 	} config;
 
 	Filter<2> hpFilter{filterPass::HighPass, nullptr};

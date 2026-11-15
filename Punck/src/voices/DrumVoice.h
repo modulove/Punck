@@ -20,6 +20,11 @@ public:
 	virtual uint32_t ConfigSize() = 0;
 	virtual void UpdateFilter() {};
 
+	// Switchable sound engines (long press on the voice button cycles through them)
+	virtual uint8_t EngineCount() { return 1; }
+	virtual uint8_t GetEngine() { return 0; }
+	virtual void SetEngine(const uint8_t e) {}
+
 	// One queue slot per player: the sampler voice drives two players (A/B) which may be triggered simultaneously
 	static constexpr uint8_t queueSlots = 2;
 	volatile bool noteQueued[queueSlots] = {};	// Declared volatile to ensure that bool is only set once values are stored ready for playing

@@ -30,6 +30,10 @@ struct NoteMapper {
 		uint8_t debounce = 0;
 		bool buttonOn;
 
+		bool ButtonHeld() {
+			return btnGpioBank && (btnGpioBank->IDR & (1 << btnGpioPin)) == 0;
+		}
+
 		TriggerType IsOn()  {
 			TriggerType triggers = (TriggerType)((btnGpioBank && (btnGpioBank->IDR & (1 << btnGpioPin)) == 0) ? 1 : 0 |
 							   (trgGpioBank && (trgGpioBank->IDR & (1 << trgGpioPin)) == 0) ? 2 : 0 |
@@ -76,6 +80,7 @@ public:
 	void NoteOn(MidiHandler::MidiNote midiNote, const uint8_t channel);	// channel 0-15
 	void KickTriggered(const float velocity);					// Starts sidechain ducking
 	void MidiClock();											// MIDI clock tick (24 ppqn)
+	float SixteenthSamples();									// Tempo for synced effects: MIDI clock > sequencer > kick interval
 	void Output();
 	void CheckButtons();
 	void IdleTasks();
@@ -122,6 +127,17 @@ private:
 	float duckReleaseCoef = 0.9998f;
 	static constexpr float duckAttackCoef = 0.02f;				// ~1ms attack avoids clicks on ducked voices
 	uint32_t lastClockSample = 0;
+	uint32_t lastKickSample = 0;
+	float kickIntervalSamples = 0.0f;
+
+	// Long press engine switching and LED feedback
+	static constexpr uint32_t longPressMs = 700;
+	uint32_t pressStart[Voice::count] = {};
+	bool pressActive[Voice::count] = {};
+	uint8_t blinkCount[Voice::count] = {};
+	uint32_t blinkStart[Voice::count] = {};
+	void CheckLongPress(NoteMapper& note);
+	void ShowBlinks();
 
 	enum class ButtonMode {playNote, midiLearn, drumPattern};
 	enum class MidiLearnState {off, lowNote, highNote};

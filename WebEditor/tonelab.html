@@ -127,7 +127,7 @@ const STRUCTS = {
   Reverb: { voice: -1, fields: [["reverbLevel",1],["mixerBaseDelay",1],["diffuserCount",1],["mixerChannels",1],["filterCutoff",1]] },
   Mix:    { voice: -2, fields: [["duckDrums",1],["duckSamplers",1],["duckReverb",1],["duckHoldMs",1],["duckReleaseMs",1],["kickReverbSend",1],
             ["compOn",1],["compThreshold",1],["compRatio",1],["compAttack",1],["compRelease",1],["compKnee",1],["compMakeup",1],["compMix",1],
-            ["compScHpf",1],["compKick",1],["clipMode",1],["clipDrive",1],["outTrim",1]] },
+            ["compScHpf",1],["compKick",1],["clipMode",1],["clipDrive",1],["outTrim",1],["inputTrim",1]] },
 };
 
 // ---------------------------------------------------------------------------------------------
@@ -175,7 +175,7 @@ const NEWDEF = {
            partialFM: [0, 8, 1, 6, 1, 0, 0, 0], engine: 1, pitch: 400, tone: 0.6, noisiness: 0.35 },
   Mix: { duckDrums: 0, duckSamplers: 0, duckReverb: 0, duckHoldMs: 25, duckReleaseMs: 160, kickReverbSend: 0,
          compOn: 1, compThreshold: -12, compRatio: 3, compAttack: 15, compRelease: 120, compKnee: 6, compMakeup: 3, compMix: 1,
-         compScHpf: 90, compKick: 0, clipMode: 1, clipDrive: 2, outTrim: 0 },
+         compScHpf: 90, compKick: 0, clipMode: 1, clipDrive: 2, outTrim: 0, inputTrim: 0 },
 };
 for (const s in NEWDEF) FACTORY[s] = { ...NEWDEF[s], ...FACTORY[s] };
 // Engine choices on top of the existing presets
@@ -235,7 +235,7 @@ function fmt(v, unit) {
     case "st": return Math.round(v) + " st";
     case "%0": return Math.round(v) + " %";
     case "onoff": return v >= 0.5 ? "on" : "off";
-    case "clip": return ["tanh", "soft", "hard"][Math.round(v)];
+    case "clip": return ["tanh", "clean", "hard", "warm"][Math.round(v)];
     case "fx": return ["soft", "hard", "fold"][Math.round(v)];
     case "curve": return v < 0.2 ? "808 " + v.toFixed(2) : v > 0.8 ? "909 " + v.toFixed(2) : v.toFixed(2);
     default: return v.toFixed(Math.abs(v) < 1 ? 3 : 2);
@@ -343,7 +343,8 @@ const UI = {
     ["Tail decay", "reverbDecay", 0, "decay", "ms", 20, 1500, "log"],
     ["Raw noise", "unfilteredNoiseLevel", 0, "lin", "", 0, 0.3, "lin"],
   ]},
-  Mix: { title: "Master", noDice: true, hint: "Bus compressor on drums, samples and reverb (kick stays out unless Kick→comp), then the clipper on everything. 'Save to Punck' keeps it.", controls: [
+  Mix: { title: "Master", noDice: true, hint: "Input trim → bus compressor (drums, samples, reverb; kick only with Kick→comp) → clipper on everything. Clean and loud: keep 'Into clip' peaks around 0…+3 dB; more = audible distortion → turn Input (or the Level pots) down. 'Save to Punck' keeps it.", controls: [
+    ["Input", "inputTrim", 0, "lin", "dB", -18, 6, "lin"],
     ["Comp", "compOn", 0, "lin", "onoff", 0, 1, "lin"],
     ["Threshold", "compThreshold", 0, "lin", "dB", -40, 0, "lin"],
     ["Ratio", "compRatio", 0, "lin", "ratio", 1, 20, "log"],
@@ -354,9 +355,9 @@ const UI = {
     ["Parallel", "compMix", 0, "pct", "%0", 0, 100, "lin"],
     ["SC HPF", "compScHpf", 0, "lin", "Hz", 20, 300, "log"],
     ["Kick→comp", "compKick", 0, "lin", "onoff", 0, 1, "lin"],
-    ["Clip", "clipMode", 0, "lin", "clip", 0, 2, "lin"],
+    ["Clip", "clipMode", 0, "lin", "clip", 0, 3, "lin"],
     ["Clip drive", "clipDrive", 0, "lin", "dB", 0, 12, "lin"],
-    ["Output", "outTrim", 0, "lin", "dB", -12, 0, "lin"],
+    ["Output", "outTrim", 0, "lin", "dB", -12, 0.7, "lin"],
     ["Duck drums", "duckDrums", 0, "lin", "", 0, 1, "lin"],
     ["Duck smpl", "duckSamplers", 0, "lin", "", 0, 1, "lin"],
     ["Duck verb", "duckReverb", 0, "lin", "", 0, 1, "lin"],

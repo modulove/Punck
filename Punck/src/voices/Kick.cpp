@@ -14,15 +14,15 @@ constexpr uint32_t Rumble::lineLen[4];
 
 void Rumble::Init()
 {
-	memset(line, 0, sizeof(line));
+	clearPos = 0;														// Process clears the lines before running
 	for (auto& p : pos) {
 		p = 0;
 	}
 	phase = 0;
 	preLp = heldL = heldR = smoothL = smoothR = 0.0f;
 	hpStateL = hpStateR = hpLastL = hpLastR = 0.0f;
-	lpL.Init();
-	lpR.Init();
+	lpL.Reset();									// keep the coefficients: Init() would set Q = 100 (screaming resonance)
+	lpR.Reset();
 }
 
 
@@ -32,7 +32,7 @@ void Rumble::Configure(const float fb, const float cutoffHz, const float drive, 
 	gain = 1.0f + 8.0f * std::clamp(drive, 0.0f, 1.0f);
 	norm = 1.0f / (1.0f + 1.5f * std::clamp(drive, 0.0f, 1.0f));
 	width = std::clamp(w, 0.0f, 1.0f);
-	hpCoef = std::exp(-6.2831853f * std::clamp(hpHz, 5.0f, 300.0f) / rate);
+	hpCoef = dyn::ExpNeg(6.2831853f * std::clamp(hpHz, 5.0f, 300.0f) / rate);
 	const float f = std::clamp(cutoffHz, 20.0f, 1500.0f) / rate;
 	lpL.set_f_q<stmlib::FREQUENCY_FAST>(f, 0.8f);
 	lpR.set_f_q<stmlib::FREQUENCY_FAST>(f, 0.8f);
@@ -41,6 +41,16 @@ void Rumble::Configure(const float fb, const float cutoffHz, const float drive, 
 
 void Rumble::Process(const float in, float& outL, float& outR)
 {
+	constexpr uint32_t total = sizeof(line) / sizeof(float);
+	if (clearPos < total) {												// 64 values per sample: cleared in ~0.5 ms
+		float* l = &line[0][0];
+		const uint32_t end = std::min(clearPos + 64, total);
+		while (clearPos < end) {
+			l[clearPos++] = 0.0f;
+		}
+		outL = outR = 0.0f;
+		return;
+	}
 	preLp += 0.075f * (in - preLp);										// ~600 Hz anti-alias before decimation
 
 	if (++phase >= decimation) {
@@ -195,10 +205,14 @@ void Kick::Play(const uint8_t voice, const uint32_t noteOffset, const uint32_t n
 		fmAmp = 1.0f;
 		fmPitchEnv = 1.0f;
 		fmIndexEnv = 1.0f;
+		// Coefficients once per hit (Attack/Decay pots are read at the hit)
+		fmPitchCoef = dyn::ExpNeg(1.0f / (std::max(config.fmPitchDecay, 1.0f) * 48.0f));
+		fmIndexCoef = dyn::ExpNeg(1.0f / ((4.0f + 40.0f * knobA) * 48.0f));
+		fmAmpCoef = dyn::DecayCoef(80.0f * dyn::FastExp2(4.9658f * knobB));			// 80 ms .. 2.5 s
+		fmIndex = 5.0f * knobA;
 		break;
 
 	case rumble: {
-		ConfigureRumble();
 		body.Trigger(BodyParams(knobB, 1.0f, 1.0f), accent);
 		noiseEnv = std::max(noiseEnv, accent * config.rumbleNoise);
 
@@ -215,6 +229,8 @@ void Kick::Play(const uint8_t voice, const uint32_t noteOffset, const uint32_t n
 		break;
 	}
 
+	idle = false;
+	quietCount = 0;
 	voiceManager.KickTriggered(velocity);		// Sidechain envelope (used by the rumble; other voices only if enabled)
 }
 
@@ -291,22 +307,17 @@ float Kick::CalcFm()
 {
 	// 2-operator FM kick: sine carrier with exponential pitch drop, modulator index envelope = attack grit
 	const float f0 = config.pitch * notePitch / systemSampleRate;
-	const float pitchCoef = std::exp(-1.0f / (std::max(config.fmPitchDecay, 1.0f) * 48.0f));
-	const float indexCoef = std::exp(-1.0f / ((4.0f + 40.0f * knobA) * 48.0f));
-	const float t60 = 80.0f * std::pow(2500.0f / 80.0f, knobB);						// 80 ms .. 2.5 s
-	const float ampCoef = std::exp(-6.9078f / (t60 * 48.0f));
-
 	const float f = std::min(f0 * (1.0f + config.fmPitchEnv * fmPitchEnv), 0.2f);
-	fmPitchEnv *= pitchCoef;
-	fmIndexEnv *= indexCoef;
-	fmAmp *= ampCoef;
+	fmPitchEnv *= fmPitchCoef;
+	fmIndexEnv *= fmIndexCoef;
+	fmAmp *= fmAmpCoef;
 
 	fmPhaseM += f * config.fmRatio;
 	fmPhaseM -= static_cast<float>(static_cast<int32_t>(fmPhaseM));
 	fmPhaseC += f;
 	fmPhaseC -= static_cast<float>(static_cast<int32_t>(fmPhaseC));
 
-	const float index = 5.0f * knobA * fmIndexEnv;
+	const float index = fmIndex * fmIndexEnv;
 	const float mod = plaits::Sine(fmPhaseM) * index * 0.159155f;					// radians -> cycles
 	const float out = plaits::Sine(fmPhaseC + mod + 4.0f) * fmAmp;
 	return Saturate(out, config.drive);
@@ -321,6 +332,13 @@ void Kick::CalcOutput()
 
 	if (engine == classic) {
 		CalcClassic();
+		return;
+	}
+
+	if (idle && !trigger) {
+		outputLevel[0] = outputLevel[1] = 0.0f;
+		ledEnv = 0.0f;
+		noteMapper->pwmLed.Level(0.0f);
 		return;
 	}
 
@@ -359,6 +377,8 @@ void Kick::CalcOutput()
 		outputLevel[1] = level * r;
 		ledEnv = std::max(body.Level(), ledEnv * 0.9997f);
 		noteMapper->pwmLed.Level(std::min(ledEnv, 1.0f));
+		const bool tapsPending = tapCountdown[0] > 0 || tapCountdown[1] > 0 || tapCountdown[2] > 0;
+		CheckIdle(std::abs(l) + std::abs(r), tapsPending);
 		return;
 	}
 
@@ -370,31 +390,42 @@ void Kick::CalcOutput()
 	outputLevel[0] = outputLevel[1] = level * out;
 	ledEnv = std::max(std::abs(out), ledEnv * 0.9997f);
 	noteMapper->pwmLed.Level(std::min(ledEnv, 1.0f));
+	CheckIdle(std::abs(out), false);
+}
+
+
+void Kick::CheckIdle(const float magnitude, const bool busy)
+{
+	if (magnitude < 2e-5f && !busy) {
+		if (++quietCount > quietLimit) {
+			idle = true;
+		}
+	} else {
+		quietCount = 0;
+	}
 }
 
 
 KickBody::Params Kick::BodyParams(const float lengthKnob, const float lengthScale, const float clickScale)
 {
-	// Called once per hit: the expensive maths happens here, not per sample
+	// Called on every hit and ghost tap inside the audio interrupt: config dependent parts are precomputed in
+	// ConfigureRumble, the rest uses cheap maths (library exp/pow here caused audio underruns)
 	KickBody::Params bp;
 	bp.f0 = std::min(config.pitch * notePitch / systemSampleRate, 0.1f);
-	const float c = std::clamp(config.curve, 0.0f, 1.0f);
-	bp.sweepOct = std::clamp(config.sweep, 0.0f, 60.0f) / 12.0f * (0.35f + 0.65f * c);
-	const float tauMs = 45.0f * std::pow(0.15f, c);								// 45 ms round ... 7 ms snap
-	bp.sweepCoef = std::exp(-1.0f / (tauMs * 0.001f * systemSampleRate));
+	bp.sweepOct = bodySweepOct;
+	bp.sweepCoef = bodySweepCoef;
 
-	const float lengthMs = lengthScale * 80.0f * std::pow(2500.0f / 80.0f, lengthKnob);	// Decay pot: 80 ms .. 2.5 s
+	const float lengthMs = lengthScale * 80.0f * dyn::FastExp2(4.9658f * lengthKnob);	// Decay pot: 80 ms .. 2.5 s
 	const float holdMs = std::clamp(config.sustain, 0.0f, 1.0f) * 0.5f * lengthMs;
 	bp.holdSamples = static_cast<uint32_t>(holdMs * 48.0f);
-	bp.holdCoef = bp.holdSamples > 0 ? std::exp(-0.3567f / bp.holdSamples) : 1.0f;	// -3 dB across the plateau
-	bp.decayCoef = std::exp(-6.9078f / (std::max(lengthMs - holdMs, 20.0f) * 48.0f));
+	bp.holdCoef = bp.holdSamples > 0 ? dyn::ExpNeg(0.3567f / bp.holdSamples) : 1.0f;	// -3 dB across the plateau
+	bp.decayCoef = dyn::DecayCoef(std::max(lengthMs - holdMs, 20.0f));
 
 	bp.color = std::clamp(config.color, 0.0f, 1.0f);
 	bp.click = std::clamp(config.click, 0.0f, 2.0f) * clickScale;
-	bp.clickCoef = std::exp(-1.0f / (std::clamp(config.clickDecay, 0.3f, 100.0f) * 48.0f));
-	const float tone = std::clamp(config.tone, 0.0f, 1.0f);
-	bp.clickF = std::min(bp.f0 * (3.0f + 9.0f * tone), 0.08f);					// knock 3x .. 12x the base pitch
-	bp.clickNoiseF = 500.0f * std::pow(12.0f, tone) / systemSampleRate;		// noise band 500 Hz .. 6 kHz
+	bp.clickCoef = bodyClickCoef;
+	bp.clickF = std::min(bp.f0 * bodyClickRatio, 0.08f);							// knock 3x .. 12x the base pitch
+	bp.clickNoiseF = bodyNoiseF;
 	return bp;
 }
 
@@ -421,8 +452,18 @@ void Kick::ConfigureRumble()
 {
 	rumbleFx.Configure(config.rumbleFeedback, config.rumbleCutoff, config.rumbleDrive, config.rumbleHp, config.rumbleWidth);
 	const float tapMs = 50.0f + 400.0f * std::clamp(config.tapLength, 0.0f, 1.0f);
-	noiseCoef = std::exp(-6.9078f / ((300.0f + 3.0f * tapMs) * 48.0f));		// noise lingers: a bed under the rumble
-	subDecayCoef = std::exp(-6.9078f / (tapMs * 1.5f * 48.0f));
+	noiseCoef = dyn::DecayCoef(300.0f + 3.0f * tapMs);							// noise lingers: a bed under the rumble
+	subDecayCoef = dyn::DecayCoef(tapMs * 1.5f);
+
+	// Body parameters that only depend on the config (BodyParams runs on every hit)
+	const float curve = std::clamp(config.curve, 0.0f, 1.0f);
+	bodySweepOct = std::clamp(config.sweep, 0.0f, 60.0f) / 12.0f * (0.35f + 0.65f * curve);
+	const float tauMs = 45.0f * dyn::FastExp2(-2.737f * curve);					// 45 ms round ... 7 ms snap (0.15^curve)
+	bodySweepCoef = dyn::ExpNeg(1.0f / (tauMs * 48.0f));
+	bodyClickCoef = dyn::ExpNeg(1.0f / (std::clamp(config.clickDecay, 0.3f, 100.0f) * 48.0f));
+	const float tone = std::clamp(config.tone, 0.0f, 1.0f);
+	bodyClickRatio = 3.0f + 9.0f * tone;
+	bodyNoiseF = 500.0f * dyn::FastExp2(3.585f * tone) / systemSampleRate;	// noise band 500 Hz .. 6 kHz (12^tone)
 }
 
 
@@ -491,17 +532,20 @@ void Kick::SetEngine(const uint8_t e)
 {
 	engine = static_cast<Engine>(e < engineCount ? e : 0);
 	config.engine = engine;
-	analogBd.Init();
-	syntheticBd.Init();
-	body.Init();
-	ghost.Init();
-	rumbleFx.Init();
-	ConfigureRumble();
+	// Only initialise the new engine's state: this runs inside the audio interrupt
+	switch (engine) {
+	case deep:		analogBd.Init(); break;
+	case punch:		syntheticBd.Init(); break;
+	case rumble:	body.Init(); ghost.Init(); rumbleFx.Init(); ConfigureRumble(); break;
+	default:		break;
+	}
 	for (auto& t : tapCountdown) {
 		t = -1;
 	}
 	noiseEnv = subEnv = 0.0f;
 	subAttack = false;
+	idle = false;
+	quietCount = 0;
 	phase = Phase::Off;
 	playing = (engine != classic);				// sample based engines run continuously
 	trigger = false;

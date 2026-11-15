@@ -71,6 +71,10 @@ struct NoteMapper {
 };
 
 
+// DAC level of 1.0 (upstream chose 0.92 as the maximum before the output stage distorts - verified with tools/level_test.py)
+static constexpr float adjOutputScaleValue = 0.92f;
+static constexpr float maxOutTrimDb = 0.70f;					// outTrim above 0 dB: clipper ceiling up to 99.7 % of DAC full scale
+
 class VoiceManager {
 	friend class CDCHandler;
 public:
@@ -124,9 +128,10 @@ public:
 		float compMix = 1.0f;				// Parallel (New York) blend: 0 = dry, 1 = fully compressed
 		float compScHpf = 90.0f;			// Detector high-pass (Hz): sub energy pumps the bus less
 		float compKick = 0.0f;				// 0 = kick bypasses the compressor (no pumping, still clipped), 1 = kick goes through it
-		float clipMode = 1.0f;				// 0 = original tanh, 1 = soft clip, 2 = hard clip (both anti-aliased)
+		float clipMode = 1.0f;				// 0 = original tanh, 1 = clean (linear to -4.4 dB, soft knee), 2 = hard, 3 = warm (anti-aliased)
 		float clipDrive = 2.0f;				// dB into the clipper
-		float outTrim = 0.0f;				// dB after the clipper
+		float outTrim = 0.0f;				// dB after the clipper (up to +0.7 dB = DAC full scale)
+		float inputTrim = 0.0f;				// dB on the whole mix before compressor and clipper (gain staging for hot pots)
 	} mixConfig;
 
 	struct Meter {
@@ -138,6 +143,22 @@ public:
 		float underruns;
 	};
 	void GetMeter(Meter& m);					// Reads and resets the peak values
+
+	// Cycle profile per block (DWT counter): voices in Voice order, then reverb and master bus
+	static constexpr uint32_t profCount = Voice::count + 2, profReverb = Voice::count, profMaster = Voice::count + 1;
+	float profAvg[profCount] = {};
+	volatile float profMax[profCount] = {};
+	void Profile(const uint32_t block, const uint32_t cycles) {
+		profAvg[block] += 0.001f * (static_cast<float>(cycles) - profAvg[block]);
+		if (cycles > profMax[block]) {
+			profMax[block] = cycles;
+		}
+	}
+
+	// Test and calibration helpers (console)
+	void RequestEngine(const uint8_t voice, const uint8_t engine);	// Applied in the audio interrupt (blinks like a long press)
+	void SetTestTone(const float freqHz, const float levelDb);		// freqHz 0 = off; level relative to the clipper ceiling
+	const char* ButtonModeName();
 
 	float duckLevel = 0.0f;										// Current duck amount (0 - 1)
 	volatile uint32_t sampleClock = 0;							// Counts output samples (48kHz)
@@ -161,16 +182,29 @@ private:
 	dyn::Clipper clipper[2];
 	float clipGain = 1.0f;
 	float outGain = 1.0f;
+	float inGain = 1.0f;
 	float meterReduction = 0.0f, meterClip = 0.0f, meterPeak = 0.0f;
 
-	// Long press engine switching and LED feedback
+	// Long press engine switching and LED feedback. The hold is timed from the button level itself (not the
+	// debounced edge), with 30 ms tolerance for contact bounce, in Play and Sequence switch positions.
 	static constexpr uint32_t longPressMs = 700;
-	uint32_t pressStart[Voice::count] = {};
-	bool pressActive[Voice::count] = {};
+	static constexpr uint32_t blinkOnMs = 150, blinkPeriodMs = 350;
+	bool holding[Voice::count] = {};
+	bool holdFired[Voice::count] = {};
+	uint32_t holdStart[Voice::count] = {};
+	uint32_t lastHeld[Voice::count] = {};
+	uint8_t shownEngine[Voice::count] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};	// 0xFF: blink once at boot
+	bool blinkPreview[Voice::count] = {};
 	uint8_t blinkCount[Voice::count] = {};
 	uint32_t blinkStart[Voice::count] = {};
+	uint32_t lastBlinkTick = 0;
+	volatile uint8_t requestedEngine[Voice::count] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
 	void CheckLongPress(NoteMapper& note);
 	void ShowBlinks();
+
+	// Test tone for level calibration (console 'tone:freq,dB'): replaces the whole output
+	volatile float testToneInc = 0.0f, testToneLevel = 0.0f;
+	float testTonePhase = 0.0f;
 
 	enum class ButtonMode {playNote, midiLearn, drumPattern};
 	enum class MidiLearnState {off, lowNote, highNote};

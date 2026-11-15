@@ -109,6 +109,11 @@ void CDCHandler::ProcessCommand()
 				"mix         -  Show master bus (compressor, clipper) and ducking settings\r\n"
 				"mix:i,v     -  Set mix setting i to value v (saveconfig to keep)\r\n"
 				"cpu         -  Audio CPU load and compressor / clipper meter\r\n"
+				"status      -  Switch position, sound engines, held buttons\r\n"
+				"pots        -  Pot positions\r\n"
+				"engine:v,e  -  Set engine e (from 1) on voice v (1 kick, 2 snare, 3 hats)\r\n"
+				"play:v,vel,o   Trigger voice v (1-7) with velocity and note offset\r\n"
+				"tone:f,dB   -  Test sine (dB re clipper ceiling) replacing the output; tone:0 = off\r\n"
 				"reboot      -  Reboot device\r\n"
 				"leds:x      -  Set all LEDs to brightness from 1-100%\r\n"
 				"revertleds  -  Reset all LEDs\r\n"
@@ -178,11 +183,81 @@ void CDCHandler::ProcessCommand()
 		voiceManager.GetMeter(m);
 		printf("CPU avg: %.1f%%  max: %.1f%%  underruns: %lu\r\n", m.cpuAvg, m.cpuMax, i2sUnderrun);
 		printf("Comp reduction max: %.1f dB  into clipper: %+.1f dB  output peak: %+.1f dBFS\r\n", m.reductionDb, m.clipDb, m.peakDb);
+		static constexpr const char* blocks[] = {"kick", "snare", "hats", "samples", "-", "toms", "claps", "reverb", "master"};
+		printf("Cycles avg/max per sample (budget ~8370):");
+		for (uint32_t i = 0; i < VoiceManager::profCount; ++i) {
+			if (i != VoiceManager::Voice::samplerB) {
+				printf(" %s %.0f/%.0f", blocks[i], voiceManager.profAvg[i], voiceManager.profMax[i]);
+				voiceManager.profMax[i] = 0.0f;
+			}
+		}
+		printf("\r\n");
+
+	} else if (cmd.compare("status") == 0) {					// Switch position and sound engines
+		static constexpr const char* kickNames[] = {"classic", "deep", "punch", "fm", "rumble"};
+		static constexpr const char* snareNames[] = {"classic", "808", "909", "rim"};
+		static constexpr const char* hatNames[] = {"classic", "808", "909"};
+		printf("Switch: %s\r\n", voiceManager.ButtonModeName());
+		const uint8_t k = voiceManager.kickPlayer.GetEngine(), s = voiceManager.snarePlayer.GetEngine(), h = voiceManager.hihatPlayer.GetEngine();
+		printf("Kick  engine %d (%s)\r\nSnare engine %d (%s)\r\nHats  engine %d (%s)\r\n", k + 1, kickNames[k % 5], s + 1, snareNames[s % 4], h + 1, hatNames[h % 3]);
+		printf("Buttons held:");
+		for (auto& nm : voiceManager.noteMapper) {
+			if (nm.trigger.ButtonHeld()) {
+				printf(" %d", nm.voice + 1);
+			}
+		}
+		printf("\r\n");
+
+	} else if (cmd.compare("pots") == 0) {						// Pot positions (0 - 100 %)
+		static constexpr const char* names[] = {"Kick attack", "Kick decay", "Kick level", "Snare filter", "Snare tuning", "Snare level",
+				"Sample A level", "Sample B level", "Tempo", "Hats decay", "Hats level", "Sample A voice", "Sample A speed",
+				"Sample B voice", "Sample B speed"};
+		for (uint32_t i = 0; i < ADC1_BUFFER_LENGTH + ADC2_BUFFER_LENGTH; ++i) {
+			printf("%-15s %5.1f %%\r\n", names[i], ADC_array[i] / 655.35f);
+		}
+
+	} else if (cmd.compare(0, 7, "engine:") == 0) {				// engine:v,e  set engine e (1 = first, as blinked) on voice v (1 kick, 2 snare, 3 hats)
+		int v = 0, e = 0;
+		if (sscanf(cmd.data() + 7, "%d,%d", &v, &e) == 2 && v >= 1 && v <= VoiceManager::Voice::count && e >= 1) {
+			voiceManager.RequestEngine(v - 1, e - 1);
+			printf("Voice %d engine %d (saveconfig or Tone Lab 'Save to Punck' to keep)\r\n", v, e);
+		} else {
+			printf("Format: engine:voice,engine  (voice 1 kick, 2 snare, 3 hats; engine from 1)\r\n");
+		}
+
+	} else if (cmd.compare(0, 5, "play:") == 0) {				// play:v[,velocity 1-127[,note offset]][;v,...]  trigger voices (test recordings)
+		const char* p = cmd.data() + 5;
+		while (p && *p) {
+			int v = 0, vel = 100, offset = 0;
+			const int n = sscanf(p, "%d,%d,%d", &v, &vel, &offset);
+			if (n >= 1 && v >= 1 && v <= VoiceManager::Voice::count) {
+				NoteMapper& nm = voiceManager.noteMapper[v - 1];
+				const uint32_t range = nm.midiHigh - nm.midiLow + 1;
+				if (nm.drumVoice) {
+					nm.drumVoice->QueuePlay(nm.voiceIndex, std::min((uint32_t)std::max(offset, 0), range - 1), range, std::clamp(vel, 1, 127) / 127.0f);
+				}
+			}
+			p = strchr(p, ';');
+			if (p) {
+				++p;
+			}
+		}
+
+	} else if (cmd.compare(0, 5, "tone:") == 0) {				// tone:freq,dB  test sine replacing the output (dB re clipper ceiling), tone:0 = off
+		char* end = nullptr;
+		const float f = strtof(cmd.data() + 5, &end);
+		const float db = (end && *end == ',') ? strtof(end + 1, nullptr) : -20.0f;
+		voiceManager.SetTestTone(f, db);
+		if (f > 0.0f) {
+			printf("Test tone %.0f Hz at %.1f dB\r\n", f, db);
+		} else {
+			printf("Test tone off\r\n");
+		}
 
 	} else if (cmd.compare(0, 3, "mix") == 0) {					// Show or set master bus / ducking parameters: mix or mix:index,value
 		static constexpr const char* names[] = {"duckDrums", "duckSamplers", "duckReverb", "duckHoldMs", "duckReleaseMs", "kickReverbSend",
 				"compOn", "compThreshold dB", "compRatio", "compAttack ms", "compRelease ms", "compKnee dB", "compMakeup dB", "compMix",
-				"compScHpf Hz", "compKick", "clipMode 0 tanh 1 soft 2 hard", "clipDrive dB", "outTrim dB"};
+				"compScHpf Hz", "compKick", "clipMode 0 tanh 1 clean 2 hard 3 warm", "clipDrive dB", "outTrim dB", "inputTrim dB"};
 		constexpr uint32_t count = sizeof(VoiceManager::MixConfig) / sizeof(float);
 		static_assert(sizeof(names) / sizeof(names[0]) == count, "mix names out of sync with MixConfig");
 		float* values = reinterpret_cast<float*>(&voiceManager.mixConfig);

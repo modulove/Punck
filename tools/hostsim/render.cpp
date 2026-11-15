@@ -67,14 +67,15 @@ static void Pots(const float kickAttack, const float kickDecay, const float hatD
 // Master bus: same maths as VoiceManager::Output / StoreMixConfig
 struct MixConfig {
 	float compOn = 1.0f, compThreshold = -12.0f, compRatio = 3.0f, compAttack = 15.0f, compRelease = 120.0f, compKnee = 6.0f,
-		  compMakeup = 3.0f, compMix = 1.0f, compScHpf = 90.0f, compKick = 0.0f, clipMode = 1.0f, clipDrive = 2.0f, outTrim = 0.0f;
+		  compMakeup = 3.0f, compMix = 1.0f, compScHpf = 90.0f, compKick = 0.0f, clipMode = 1.0f, clipDrive = 2.0f, outTrim = 0.0f,
+		  inputTrim = 0.0f;
 };
 
 struct MasterBus {
 	MixConfig m;
 	dyn::Compressor comp;
 	dyn::Clipper clip[2];
-	float clipGain = 1.0f, outGain = 1.0f;
+	float clipGain = 1.0f, outGain = 1.0f, inGain = 1.0f;
 	float grMax = 0.0f; double grSum = 0.0; uint64_t n = 0, clipped = 0;
 
 	void Configure()
@@ -82,6 +83,7 @@ struct MasterBus {
 		comp.Configure(systemSampleRate, m.compThreshold, m.compRatio, m.compKnee, m.compAttack, m.compRelease, m.compMakeup, m.compScHpf);
 		clipGain = std::pow(10.0f, m.clipDrive / 20.0f);
 		outGain = std::pow(10.0f, m.outTrim / 20.0f);
+		inGain = std::pow(10.0f, m.inputTrim / 20.0f);
 	}
 	static float FastTanh(const float x)
 	{
@@ -94,7 +96,8 @@ struct MasterBus {
 	{
 		const bool kickThru = m.compKick > 0.5f;
 		float bus[2];
-		for (int c = 0; c < 2; ++c) bus[c] = drums[c] + (kickThru ? kick[c] : 0.0f);
+		const float k[2] = {kick[0] * inGain, kick[1] * inGain};
+		for (int c = 0; c < 2; ++c) bus[c] = inGain * drums[c] + (kickThru ? k[c] : 0.0f);
 		if (m.compOn > 0.5f) {
 			const float g = comp.Gain(bus[0], bus[1]);
 			const float busGain = (1.0f - m.compMix) + m.compMix * g;
@@ -103,14 +106,14 @@ struct MasterBus {
 		}
 		++n;
 		for (int c = 0; c < 2; ++c) {
-			const float x = bus[c] + (kickThru ? 0.0f : kick[c]);
+			const float x = bus[c] + (kickThru ? 0.0f : k[c]);
 			if (m.clipMode < 0.5f) {
 				out[c] = FastTanh(x);
 				if (std::abs(x) > 1.0f) ++clipped;
 			} else {
 				const float xd = x * clipGain;
 				if (std::abs(xd) > 1.0f) ++clipped;
-				out[c] = clip[c].Process(xd, m.clipMode > 1.5f) * outGain;
+				out[c] = clip[c].Process(xd, static_cast<uint32_t>(m.clipMode + 0.5f)) * outGain;
 			}
 		}
 	}
@@ -200,14 +203,16 @@ static void RumbleProfile(const char* name, const float attack, const int index 
 
 
 // Deep / dub techno groove through the old output stage and through the new master bus
-static void RenderGroove(const std::string& dir, const std::string& name, MixConfig cfg, const float kickLevel)
+static void RenderGroove(const std::string& dir, const std::string& name, MixConfig cfg, const float kickLevel)  // kickLevel: all level pots
 {
 	Rig r;
 	r.kick.SetEngine(4);											// rumble
 	r.snare.SetEngine(3);											// rim
 	r.hat.SetEngine(1);												// 808 hats
 	Pots(0.6f, 0.45f, 0.3f);
-	ADC_array[ADC_KickLevel] = static_cast<uint16_t>(kickLevel * 32768.0f);
+	for (auto pot : {ADC_KickLevel, ADC_SnareLevel, ADC_HiHatLevel}) {		// level pots: 1.0 = noon, 2.0 = full
+		ADC_array[pot] = static_cast<uint16_t>(std::min(kickLevel * 32768.0f, 65535.0f));
+	}
 	MasterBus bus; bus.m = cfg; bus.Configure();
 	const float bpm = 124.0f, sixteenth = 60.0f / bpm * systemSampleRate / 4.0f;
 	voiceManager.sixteenth = sixteenth;
@@ -256,5 +261,11 @@ int main(int argc, char** argv)
 	RenderGroove(dir, "groove_3_master_loud", loud, 1.0f);
 	MixConfig pump = def; pump.compKick = 1.0f; pump.compScHpf = 40.0f;
 	RenderGroove(dir, "groove_4_kick_pumps", pump, 1.0f);
+	MixConfig warm = def; warm.clipMode = 3.0f;
+	RenderGroove(dir, "groove_5_master_warm", warm, 1.0f);
+	printf("\nHot pots (all levels at max = +6 dB), clean clipper, input trim 0 / -6 dB:\n");
+	RenderGroove(dir, "groove_6_hot_pots", def, 2.0f);
+	MixConfig staged = def; staged.inputTrim = -6.0f;
+	RenderGroove(dir, "groove_7_hot_pots_trim-6", staged, 2.0f);
 	return 0;
 }

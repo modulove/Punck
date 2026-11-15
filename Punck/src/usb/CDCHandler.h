@@ -24,7 +24,7 @@ public:
 	void ProcessCommand();			// Processes command received during interrupt
 
 	bool cmdPending = false;
-	static constexpr uint32_t maxCmdLen = 40;
+	static constexpr uint32_t maxCmdLen = 96;			// modulove: room for multi-voice play: commands
 	char comCmd[maxCmdLen];
 
 

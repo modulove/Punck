@@ -23,6 +23,7 @@ private:
 	static constexpr uint32_t lineLen[4] = {211, 263, 331, 409};		// samples at 6 kHz (35 - 68 ms)
 	float line[4][409];
 	uint32_t pos[4];
+	uint32_t clearPos = 0;				// lines are cleared a few at a time (a 6.5 kB memset in the audio interrupt overran it)
 	uint32_t phase = 0;
 	float preLp = 0.0f;					// anti-alias low pass before decimation
 	float heldL = 0.0f, heldR = 0.0f, smoothL = 0.0f, smoothR = 0.0f;
@@ -89,6 +90,7 @@ private:
 	KickBody::Params BodyParams(const float lengthKnob, const float lengthScale, const float clickScale);
 	float BodyFx(const float x);
 	void ConfigureRumble();
+	void CheckIdle(const float magnitude, const bool busy);
 
 	// Classic (upstream) engine state
 	enum class Phase {Off, Ramp1, Ramp2, Ramp3, FastSine, SlowSine} phase;
@@ -112,8 +114,14 @@ private:
 	plaits::AnalogBassDrum analogBd;
 	plaits::SyntheticBassDrum syntheticBd;
 
-	// FM engine state
+	// FM engine state (coefficients are set per hit, not per sample)
 	float fmPhaseC = 0.0f, fmPhaseM = 0.0f, fmAmp = 0.0f, fmPitchEnv = 0.0f, fmIndexEnv = 0.0f;
+	float fmPitchCoef = 0.999f, fmIndexCoef = 0.999f, fmAmpCoef = 0.999f, fmIndex = 0.0f;
+
+	// Idle skip: engines that render continuously stop when silent and restart on the next hit
+	static constexpr uint32_t quietLimit = 4800;		// 100 ms below -94 dBFS
+	uint32_t quietCount = 0;
+	bool idle = false;
 
 	// Rumble engine state
 	KickBody body;
@@ -122,6 +130,7 @@ private:
 	int32_t tapCountdown[3] = {-1, -1, -1};
 	float noiseEnv = 0.0f, noiseCoef = 0.999f, noiseLp = 0.0f;
 	float subPhase = 0.0f, subEnv = 0.0f, subPeak = 0.0f, subDecayCoef = 0.999f;
+	float bodySweepOct = 1.0f, bodySweepCoef = 0.999f, bodyClickCoef = 0.99f, bodyClickRatio = 6.0f, bodyNoiseF = 0.04f;	// from config
 	bool subAttack = false;
 
 	struct Config {

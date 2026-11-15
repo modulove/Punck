@@ -2,6 +2,7 @@
 #include "VoiceManager.h"
 #include "plaits/dsp/oscillator/sine_oscillator.h"
 #include <cmath>
+#include "Dynamics.h"
 #include <cstring>
 
 void Snare::Play(const uint8_t voice, const uint32_t noteOffset, uint32_t noteRange, const float velocity, const float pitch)
@@ -27,10 +28,12 @@ void Snare::Play(const uint8_t voice, const uint32_t noteOffset, uint32_t noteRa
 	}
 
 	// Sample based engines: Tuning knob = x0.5 .. x2 around config pitch, Filter knob = snappy
-	const float hz = config.pitch * pitch * std::exp2((tuning - 0.5f) * 2.0f);
+	const float hz = config.pitch * pitch * dyn::FastExp2((tuning - 0.5f) * 2.0f);
 	f0 = std::min(hz / systemSampleRate, 0.15f);
 	snappy = static_cast<float>(ADC_array[ADC_SnareFilter]) / 65536.0f;
 	accent = std::clamp(velocity, 0.0f, 1.0f);
+	idle = false;
+	quietCount = 0;
 	decayEff = std::clamp(config.decay + 0.4f * std::min(static_cast<float>(noteOffset) / noteRange, 1.0f), 0.0f, 1.0f);
 	trigger = true;
 
@@ -41,10 +44,10 @@ void Snare::Play(const uint8_t voice, const uint32_t noteOffset, uint32_t noteRa
 			rimPhase[i] = 0.25f;										// start at peak for a hard edge
 			rimInc[i] = std::min(f0 * ratios[i], 0.45f);
 			rimEnv[i] = (i == 0 ? 1.0f : 0.6f) * accent;
-			rimCoef[i] = std::exp(-6.9078f / (std::max(decayMs[i], 2.0f) * 48.0f));
+			rimCoef[i] = dyn::DecayCoef(std::max(decayMs[i], 2.0f));
 		}
 		clickEnv = accent * (0.3f + 0.7f * snappy);
-		clickCoef = std::exp(-6.9078f / ((2.0f + 25.0f * snappy) * 48.0f));
+		clickCoef = dyn::DecayCoef(2.0f + 25.0f * snappy);
 	}
 }
 
@@ -95,6 +98,13 @@ void Snare::CalcOutput()
 		return;
 	}
 
+	if (idle && !trigger) {
+		outputLevel[left] = outputLevel[right] = 0.0f;
+		ledEnv = 0.0f;
+		noteMapper->pwmLed.Level(0.0f);
+		return;
+	}
+
 	float out = 0.0f;
 	switch (engine) {
 	case analog:
@@ -126,6 +136,14 @@ void Snare::CalcOutput()
 	outputLevel[left] = outputLevel[right] = level * out;
 	ledEnv = std::max(std::abs(out), ledEnv * 0.9995f);
 	noteMapper->pwmLed.Level(std::min(ledEnv, 1.0f));
+
+	if (std::abs(out) < 2e-5f) {
+		if (++quietCount > quietLimit) {
+			idle = true;
+		}
+	} else {
+		quietCount = 0;
+	}
 }
 
 
@@ -133,9 +151,14 @@ void Snare::SetEngine(const uint8_t e)
 {
 	engine = static_cast<Engine>(e < engineCount ? e : 0);
 	config.engine = engine;
-	analogSd.Init();
-	syntheticSd.Init();
+	if (engine == analog) {
+		analogSd.Init();
+	} else if (engine == synthetic) {
+		syntheticSd.Init();
+	}
 	rimEnv[0] = rimEnv[1] = clickEnv = 0.0f;
+	idle = false;
+	quietCount = 0;
 	playing = (engine != classic);
 	trigger = false;
 	outputLevel[0] = outputLevel[1] = 0.0f;

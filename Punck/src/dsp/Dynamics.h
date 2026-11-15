@@ -30,6 +30,23 @@ inline float FastExp2(float p)
 }
 
 
+// exp(-x) for envelope coefficients: Taylor series for small x (keeps coefficients close to 1 exact, where
+// FastExp2's 1e-4 relative error would change decay times a lot), library exp otherwise
+inline float ExpNeg(const float x)
+{
+	if (x < 0.05f) {
+		return 1.0f - x * (1.0f - 0.5f * x * (1.0f - (1.0f / 3.0f) * x * (1.0f - 0.25f * x)));
+	}
+	return std::exp(-x);
+}
+
+// Envelope coefficient for a -60 dB decay over ms milliseconds at 48 kHz
+inline float DecayCoef(const float ms)
+{
+	return ExpNeg(6.9078f / (std::max(ms, 0.1f) * 48.0f));
+}
+
+
 // Stereo linked feed-forward compressor: sidechain high-pass, peak detector, soft knee gain computer,
 // attack/release smoothing in the log domain (Giannoulis, Massberg, Reiss 2012 'smooth decoupled' topology)
 class Compressor {
@@ -84,18 +101,22 @@ private:
 
 
 // Clipper with first order antiderivative anti-aliasing (Parker, Zavalishin, Le Bivic 2016).
-// Soft: cubic x - 4/27 x^3, unity slope at 0, reaches 1.0 at x = 1.5. Hard: clamp at +/-1.
+// Clean: linear up to kneeStart (0.6 = -4.4 dB, no distortion below), quadratic knee reaching the ceiling 1.0
+//        with zero slope at 2 - kneeStart (1.4 = +2.9 dB), flat above.
+// Hard:  clamp at +/-1 (transparent below the ceiling, harsh above).
+// Warm:  cubic x - 4/27 x^3 from zero (unity slope at 0, 1.0 at 1.5): adds saturation colour at all levels.
 class Clipper {
 public:
-	float Process(const float x, const bool hard)
+	enum Mode : uint32_t {clean = 1, hard = 2, warm = 3};
+
+	float Process(const float x, const uint32_t mode)
 	{
 		const float d = x - x1;
 		float y;
 		if (std::abs(d) > 1e-5f) {
-			y = hard ? (HardF(x) - HardF(x1)) / d : (SoftF(x) - SoftF(x1)) / d;
+			y = (F(x, mode) - F(x1, mode)) / d;
 		} else {
-			const float m = 0.5f * (x + x1);
-			y = hard ? Hard(m) : Soft(m);
+			y = f(0.5f * (x + x1), mode);
 		}
 		x1 = x;
 		return y;
@@ -103,6 +124,52 @@ public:
 
 private:
 	float x1 = 0.0f;
+	static constexpr float t = 0.6f;										// clean: start of the knee
+	static constexpr float kneeEnd = 2.0f - t;
+	static constexpr float kneeK = 1.0f / (4.0f * (1.0f - t));
+
+	static float f(const float x, const uint32_t mode)
+	{
+		switch (mode) {
+			case hard: return Hard(x);
+			case warm: return Soft(x);
+			default:   return Clean(x);
+		}
+	}
+	static float F(const float x, const uint32_t mode)
+	{
+		switch (mode) {
+			case hard: return HardF(x);
+			case warm: return SoftF(x);
+			default:   return CleanF(x);
+		}
+	}
+
+	static float Clean(const float x)
+	{
+		const float a = std::abs(x);
+		float y;
+		if (a <= t) {
+			return x;
+		} else if (a < kneeEnd) {
+			const float e = a - t;
+			y = a - e * e * kneeK;
+		} else {
+			y = 1.0f;
+		}
+		return x < 0.0f ? -y : y;
+	}
+	static float CleanF(const float x)
+	{
+		// Antiderivative of Clean (even function of x)
+		const float a = std::abs(x);
+		if (a <= t) {
+			return 0.5f * a * a;
+		}
+		const float e = std::min(a, kneeEnd) - t;
+		const float knee = 0.5f * t * t + t * e + 0.5f * e * e - e * e * e * kneeK * (1.0f / 3.0f);
+		return a < kneeEnd ? knee : knee + (a - kneeEnd);
+	}
 
 	static float Soft(const float x)
 	{

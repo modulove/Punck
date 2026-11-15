@@ -85,7 +85,7 @@ uint32_t leftOverflow = 0, rightOverflow = 0;	// Debug
 //float outInc = 0.005;
 //uint32_t waitCrossing = 0;
 constexpr float adjOffset = 0.0f;
-constexpr float adjOutputScale = 0.92f;
+constexpr float adjOutputScale = adjOutputScaleValue;
 void VoiceManager::Output()
 {
 	CheckButtons();										// Handle buttons playing note or activating MIDI learn
@@ -125,6 +125,7 @@ void VoiceManager::Output()
 	uint32_t reverbStart = TIM3->CNT;
 #endif
 
+	const uint32_t reverbCycles = DWT->CYCCNT;
 	auto [reverbL, reverbR] = reverb.Process(drumsOut[left] + samplesOut[left] + mixConfig.kickReverbSend * kickOut[left],
 											 drumsOut[right] + samplesOut[right] + mixConfig.kickReverbSend * kickOut[right]);
 
@@ -139,12 +140,16 @@ void VoiceManager::Output()
 	const float samplesGain = 1.0f - mixConfig.duckSamplers * duckLevel;
 	const float reverbGain  = 1.0f - mixConfig.duckReverb * duckLevel;
 
+	const uint32_t masterCycles = DWT->CYCCNT;
+	Profile(profReverb, masterCycles - reverbCycles);
+
 	// Drum bus: everything except the dry kick (the kick joins the bus only if compKick is set)
 	const float reverbOut[2] = {reverbL, reverbR};
 	const bool kickThroughComp = mixConfig.compKick > 0.5f;
 	float bus[2];
 	for (uint8_t c = 0; c < 2; ++c) {
-		bus[c] = drumsGain * drumsOut[c] + samplesGain * samplesOut[c] + reverbGain * reverbOut[c] + (kickThroughComp ? kickOut[c] : 0.0f);
+		kickOut[c] *= inGain;
+		bus[c] = inGain * (drumsGain * drumsOut[c] + samplesGain * samplesOut[c] + reverbGain * reverbOut[c]) + (kickThroughComp ? kickOut[c] : 0.0f);
 	}
 
 	if (mixConfig.compOn > 0.5f) {
@@ -167,16 +172,24 @@ void VoiceManager::Output()
 		combinedOutput[left] = FastTanh(combinedOutput[left]);		// Original soft clipping
 		combinedOutput[right] = FastTanh(combinedOutput[right]);
 	} else {
-		const bool hard = mixConfig.clipMode > 1.5f;
+		const uint32_t mode = std::clamp<uint32_t>(static_cast<uint32_t>(mixConfig.clipMode + 0.5f), 1, 3);
 		for (uint8_t c = 0; c < 2; ++c) {
 			const float x = combinedOutput[c] * clipGain;
 			meterClip = std::max(meterClip, std::abs(x));
-			combinedOutput[c] = clipper[c].Process(x, hard) * outGain;
+			combinedOutput[c] = clipper[c].Process(x, mode) * outGain;
 		}
+	}
+	if (testToneLevel > 0.0f) {
+		testTonePhase += testToneInc;
+		if (testTonePhase >= 1.0f) {
+			testTonePhase -= 1.0f;
+		}
+		combinedOutput[left] = combinedOutput[right] = testToneLevel * std::sin(6.2831853f * testTonePhase);
 	}
 	meterPeak = std::max(meterPeak, std::max(std::abs(combinedOutput[left]), std::abs(combinedOutput[right])));
 
 
+	Profile(profMaster, DWT->CYCCNT - masterCycles);
 	const float outputScale = 2147483648.0f * adjOutputScale;
 	SPI2->TXDR = (int32_t)((combinedOutput[left] + adjOffset) *  outputScale);
 	SPI2->TXDR = (int32_t)((combinedOutput[right] + adjOffset) * outputScale);
@@ -188,7 +201,9 @@ void VoiceManager::Output()
 #if (TIMINGDEBUG)
 			uint32_t debugStart = TIM3->CNT;
 #endif
+			const uint32_t voiceCycles = DWT->CYCCNT;
 			nm.drumVoice->CalcOutput();
+			Profile(nm.voice, DWT->CYCCNT - voiceCycles);
 #if (TIMINGDEBUG)
 			nm.drumVoice->debugTime = TIM3->CNT - debugStart;
 			if (nm.drumVoice->debugTime > nm.drumVoice->debugMaxTime) {
@@ -367,10 +382,6 @@ void VoiceManager::CheckButtons()
 				} else if (buttonMode == ButtonMode::playNote || triggerType != NoteMapper::TriggerType::triggerBtn) {
 					// Trigger input only used to play notes; Trigger 2 currently only used for open hihat
 					note.drumVoice->Play(note.voiceIndex, triggerType == NoteMapper::TriggerType::trigger2 ? 128 : 0);
-					if (buttonMode == ButtonMode::playNote && (triggerType & NoteMapper::TriggerType::triggerBtn)) {
-						pressActive[note.voice] = true;						// Start timing for long press engine switch
-						pressStart[note.voice] = SysTickVal;
-					}
 
 				} else if (buttonMode == ButtonMode::drumPattern) {
 					if (sequencer.IsEmpty(note.voice)) {
@@ -391,45 +402,111 @@ void VoiceManager::CheckButtons()
 
 void VoiceManager::CheckLongPress(NoteMapper& note)
 {
-	// Holding a voice button for longPressMs switches to the next sound engine; LED blinks the engine number
+	// Holding a voice button for longPressMs switches to the next sound engine (ShowBlinks then blinks the number).
+	// Timed from the raw button level so contact bounce at the press cannot cancel it; works in Play and Sequence.
 	const uint8_t v = note.voice;
-	if (!pressActive[v]) {
+	DrumVoice* dv = note.drumVoice;
+	if (dv == nullptr || note.voiceIndex != 0) {
 		return;
 	}
-	if (!note.trigger.ButtonHeld() || buttonMode != ButtonMode::playNote) {
-		pressActive[v] = false;
-		return;
-	}
-	if (SysTickVal - pressStart[v] >= longPressMs) {
-		pressActive[v] = false;
-		DrumVoice* dv = note.drumVoice;
-		if (dv != nullptr && note.voiceIndex == 0 && dv->EngineCount() > 1) {
-			const uint8_t next = (dv->GetEngine() + 1) % dv->EngineCount();
-			dv->SetEngine(next);
-			blinkCount[v] = next + 1;
-			blinkStart[v] = SysTickVal;
+
+	// Engine change requested from the console: applied here, in the audio interrupt
+	if (requestedEngine[v] != 0xFF) {
+		if (requestedEngine[v] < dv->EngineCount()) {
+			dv->SetEngine(requestedEngine[v]);
+			blinkPreview[v] = true;
 		}
+		requestedEngine[v] = 0xFF;
+	}
+
+	if (dv->EngineCount() < 2) {
+		return;
+	}
+	const uint32_t now = SysTickVal;
+	if (note.trigger.ButtonHeld()) {
+		if (!holding[v]) {
+			holding[v] = true;
+			holdFired[v] = false;
+			holdStart[v] = now;
+		}
+		lastHeld[v] = now;
+		if (!holdFired[v] && buttonMode != ButtonMode::midiLearn && now - holdStart[v] >= longPressMs) {
+			holdFired[v] = true;										// one switch per press: release to switch again
+			dv->SetEngine((dv->GetEngine() + 1) % dv->EngineCount());
+			blinkPreview[v] = true;
+		}
+	} else if (holding[v] && now - lastHeld[v] > 30) {
+		holding[v] = false;
 	}
 }
 
 
 void VoiceManager::ShowBlinks()
 {
-	// Overrides the voice LED while showing the engine number: 120 ms on / 140 ms off per blink, then a preview hit
+	// Whenever a voice's engine changes (long press, Tone Lab, preset, console, and once at boot) its LED blinks the
+	// engine number: 150 ms on / 200 ms off. After a long press the new engine plays a preview hit.
+	const uint32_t now = SysTickVal;
+	const bool newTick = (now != lastBlinkTick);
+	lastBlinkTick = now;
+
 	for (auto& nm : noteMapper) {
 		const uint8_t v = nm.voice;
-		if (blinkCount[v] == 0 || nm.pwmLed.timerChannel == nullptr) {
+		if (nm.pwmLed.timerChannel == nullptr || nm.drumVoice == nullptr || nm.voiceIndex != 0) {
 			continue;
 		}
-		const uint32_t elapsed = SysTickVal - blinkStart[v];
-		if (elapsed >= blinkCount[v] * 260u) {
+		if (newTick && nm.drumVoice->EngineCount() > 1) {
+			const uint8_t e = nm.drumVoice->GetEngine();
+			if (e != shownEngine[v]) {
+				shownEngine[v] = e;
+				blinkCount[v] = e + 1;
+				blinkStart[v] = now;
+			}
+		}
+		if (blinkCount[v] == 0) {
+			continue;
+		}
+		const uint32_t elapsed = now - blinkStart[v];
+		if (elapsed >= blinkCount[v] * blinkPeriodMs) {
 			blinkCount[v] = 0;
 			nm.pwmLed.Level(0.0f);
-			nm.drumVoice->Play(nm.voiceIndex, 0);				// Preview the new engine
+			if (blinkPreview[v]) {
+				blinkPreview[v] = false;
+				nm.drumVoice->Play(nm.voiceIndex, 0);				// Preview the new engine
+			}
 		} else {
-			nm.pwmLed.Level((elapsed % 260u) < 120u ? 1.0f : 0.0f);
+			nm.pwmLed.Level((elapsed % blinkPeriodMs) < blinkOnMs ? 1.0f : 0.0f);
 		}
 	}
+}
+
+
+void VoiceManager::RequestEngine(const uint8_t voice, const uint8_t engine)
+{
+	if (voice < Voice::count) {
+		requestedEngine[voice] = engine;
+	}
+}
+
+
+void VoiceManager::SetTestTone(const float freqHz, const float levelDb)
+{
+	if (freqHz <= 0.0f) {
+		testToneLevel = 0.0f;
+		return;
+	}
+	testToneInc = std::min(freqHz, 20000.0f) / systemSampleRate;
+	testToneLevel = std::min(std::pow(10.0f, levelDb / 20.0f), 0.999f / adjOutputScaleValue);
+}
+
+
+const char* VoiceManager::ButtonModeName()
+{
+	switch (buttonMode) {
+		case ButtonMode::playNote:		return "Play (middle)";
+		case ButtonMode::drumPattern:	return "Sequence";
+		case ButtonMode::midiLearn:		return "MIDI learn";
+	}
+	return "?";
 }
 
 
@@ -517,7 +594,8 @@ void VoiceManager::StoreMixConfig(const uint8_t* buff, const uint32_t len)
 			std::clamp(m.compKnee, 0.0f, 24.0f), m.compAttack, m.compRelease, std::clamp(m.compMakeup, -12.0f, 24.0f), m.compScHpf);
 	m.compMix = std::clamp(m.compMix, 0.0f, 1.0f);
 	clipGain = std::pow(10.0f, std::clamp(m.clipDrive, -12.0f, 24.0f) / 20.0f);
-	outGain = std::pow(10.0f, std::clamp(m.outTrim, -24.0f, 0.0f) / 20.0f);
+	outGain = std::pow(10.0f, std::clamp(m.outTrim, -24.0f, maxOutTrimDb) / 20.0f);	// > 0 dB only up to DAC full scale
+	inGain = std::pow(10.0f, std::clamp(m.inputTrim, -24.0f, 12.0f) / 20.0f);
 }
 
 

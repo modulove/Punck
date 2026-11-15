@@ -2,6 +2,7 @@
 #include "VoiceManager.h"
 #include <cstring>
 #include <cmath>
+#include "Dynamics.h"
 
 
 void HiHat::Play(const uint8_t voice, const uint32_t noteOffset, uint32_t noteRange, const float velocity, const float pitch)
@@ -23,7 +24,7 @@ void HiHat::Play(const uint8_t voice, const uint32_t noteOffset, uint32_t noteRa
 	float pot = static_cast<float>(ADC_array[ADC_HiHatDecay]) / 65536.0f;
 	if (pot > config.randomThreshold) {
 		const float r = static_cast<float>(RNG->DR & 0xFFFFFF) / 16777216.0f;
-		pot = std::pow(r, config.randomSkew);					// skew > 1: mostly closed, occasionally open
+		pot = dyn::FastExp2(config.randomSkew * dyn::FastLog2(std::max(r, 1e-6f)));	// r^skew: mostly closed, occasionally open
 	} else {
 		pot /= config.randomThreshold;
 	}
@@ -39,6 +40,8 @@ void HiHat::Play(const uint8_t voice, const uint32_t noteOffset, uint32_t noteRa
 		f0 = std::min(config.pitch * pitch / systemSampleRate, 0.1f);
 		accent = std::clamp(velocity, 0.0f, 1.0f);
 		trigger = true;
+		idle = false;
+		quietCount = 0;
 		return;
 	}
 
@@ -71,6 +74,13 @@ void HiHat::CalcOutput()
 		return;
 	}
 
+	if (idle && !trigger) {
+		outputLevel[0] = outputLevel[1] = 0.0f;
+		ledEnv = 0.0f;
+		noteMapper->pwmLed.Level(0.0f);
+		return;
+	}
+
 	float out = 0.0f, temp1 = 0.0f, temp2 = 0.0f;
 	if (engine == square808) {
 		hat808.Render(false, trigger, accent, f0, config.tone, morph, config.noisiness, &temp1, &temp2, &out, 1);
@@ -83,6 +93,14 @@ void HiHat::CalcOutput()
 	outputLevel[0] = outputLevel[1] = level * out;
 	ledEnv = std::max(std::abs(out) * 2.0f, ledEnv * 0.9995f);
 	noteMapper->pwmLed.Level(std::min(ledEnv, 1.0f));
+
+	if (std::abs(out) < 2e-5f) {
+		if (++quietCount > quietLimit) {
+			idle = true;
+		}
+	} else {
+		quietCount = 0;
+	}
 }
 
 
@@ -90,8 +108,13 @@ void HiHat::SetEngine(const uint8_t e)
 {
 	engine = static_cast<Engine>(e < engineCount ? e : 0);
 	config.engine = engine;
-	hat808.Init();
-	hat909.Init();
+	if (engine == square808) {
+		hat808.Init();
+	} else if (engine == ringMod909) {
+		hat909.Init();
+	}
+	idle = false;
+	quietCount = 0;
 	playing = (engine != classic);
 	trigger = false;
 	outputLevel[0] = outputLevel[1] = 0.0f;

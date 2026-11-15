@@ -35,6 +35,10 @@ private:
 	float f0 = 0.008f;
 	float morph = 0.3f;						// Plaits decay for the current hit
 	float ledEnv = 0.0f;
+	// Idle skip: engines that render continuously stop when silent and restart on the next hit
+	static constexpr uint32_t quietLimit = 4800;		// 100 ms below -94 dBFS
+	uint32_t quietCount = 0;
+	bool idle = false;
 
 	// Float fields first: the web editor edits the config as a flat list of floats (new fields appended)
 	struct Config {

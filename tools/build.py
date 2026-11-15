@@ -51,6 +51,18 @@ def find_toolchain(explicit):
     return cands[-1]
 
 
+# Per-sample audio code is compiled with DSP_OPT (default -O2): at -O1 GCC hardly inlines std::clamp, Plaits'
+# Sine/Interpolate etc., which costs a lot of CPU in the 48 kHz interrupt. Everything else keeps -O1 like the
+# CubeIDE Debug configuration (USB, flash and system code are known to work there).
+FAST_DIRS = ("src/voices/", "src/dsp/", "src/third_party/")
+DSP_OPT = "-O2"
+
+
+def opt_for(src):
+    rel = os.path.relpath(src, PROJ).replace("\\", "/").lower()
+    return DSP_OPT if rel.startswith(FAST_DIRS) else "-O1"
+
+
 # Same exclusions as the CubeIDE project (.cproject sourceEntries)
 EXCLUDE = {"sysmem.c", "SerialHandler.cpp", "USB_bu.cpp", "sdram_diskio.cpp", "test.s", "diskio.c",
            "ff_gen_drv.c"}
@@ -72,6 +84,9 @@ def obj_path(src):
 def needs_build(src, obj):
     if not os.path.exists(obj):
         return True
+    stamp = obj[:-2] + ".opt"                       # rebuild when the optimisation level changes
+    if not os.path.exists(stamp) or open(stamp).read() != opt_for(src):
+        return True
     dep = obj[:-2] + ".d"
     t_obj = os.path.getmtime(obj)
     files = [src]
@@ -87,13 +102,16 @@ def compile_one(tc, src, extra_defs):
     incs = ["-I" + os.path.join(PROJ, i) for i in INC_DIRS]
     defs = ["-D" + d for d in DEFINES + extra_defs]
     if src.endswith((".cpp", ".cc")):
-        cmd = [os.path.join(tc, "arm-none-eabi-g++")] + COMMON + CXXFLAGS
+        cmd = [os.path.join(tc, "arm-none-eabi-g++")] + COMMON + [opt_for(src)] + CXXFLAGS
     elif src.endswith((".s", ".S")):
         cmd = [os.path.join(tc, "arm-none-eabi-gcc")] + CPU + ["-x", "assembler-with-cpp", "-g3"]
     else:
-        cmd = [os.path.join(tc, "arm-none-eabi-gcc")] + COMMON + CFLAGS
+        cmd = [os.path.join(tc, "arm-none-eabi-gcc")] + COMMON + [opt_for(src)] + CFLAGS
     cmd += defs + incs + ["-MMD", "-MP", "-c", src, "-o", obj]
     r = subprocess.run(cmd, capture_output=True, text=True)
+    if r.returncode == 0:
+        with open(obj[:-2] + ".opt", "w") as f:
+            f.write(opt_for(src))
     return src, r.returncode, (r.stdout + r.stderr).strip()
 
 
@@ -103,7 +121,10 @@ def main():
     ap.add_argument("--toolchain")
     ap.add_argument("-j", type=int, default=os.cpu_count() or 4)
     ap.add_argument("-D", action="append", default=[], help="extra define")
+    ap.add_argument("--dsp-opt", default="O2", help="optimisation for the audio code (O1 = same as CubeIDE Debug)")
     args = ap.parse_args()
+    global DSP_OPT
+    DSP_OPT = "-" + args.dsp_opt
 
     tc = find_toolchain(args.toolchain)
     if args.clean and os.path.isdir(BUILD):

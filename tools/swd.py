@@ -74,7 +74,7 @@ def sha256(p):
     return hashlib.sha256(open(p, "rb").read()).hexdigest()
 
 
-CHUNK = 0x400                              # small chunks: a parity error only costs one retry of 1 KB
+CHUNK = 0x2000                             # 8 KB chunks; a failed chunk is simply re-read
 
 
 def dump_pass(tmpdir, tag):
@@ -94,7 +94,8 @@ def dump_pass(tmpdir, tag):
 
 def cmd_backup(a):
     os.makedirs(a.outdir, exist_ok=True)
-    tmp = os.path.join(a.outdir, "_chunks")
+    import tempfile
+    tmp = tempfile.mkdtemp(prefix="punck_swd_")      # local temp, not the (Drive-synced) output folder
     os.makedirs(tmp, exist_ok=True)
     d1, out1 = dump_pass(tmp, "pass1")
     d2, out2 = dump_pass(tmp, "pass2") if d1 else (None, "")

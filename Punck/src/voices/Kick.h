@@ -7,7 +7,7 @@ class NoteMapper;
 
 class Kick : public DrumVoice {
 public:
-	void Play(const uint8_t voice, const uint32_t noteOffset, const uint32_t noteRange, const float velocity);
+	void Play(const uint8_t voice, const uint32_t noteOffset, const uint32_t noteRange, const float velocity, const float pitch);
 	void Play(const uint8_t voice, const uint32_t index);
 	void CalcOutput();
 	void UpdateFilter();
@@ -27,7 +27,8 @@ private:
 
 	float slowSinInc;
 	float slowSinLevel;
-	float fastSinInc = FreqToInc(config.fastSinFreq);
+	float fastSinInc = FreqToInc(130.0f);
+	float notePitch = 1.0f;					// Pitch ratio of current note (chromatic MIDI channel)
 
 	struct Config {
 		float ramp1Inc = 0.22f;					// Initial steep ramp

@@ -1,7 +1,7 @@
 #include "Claps.h"
 #include "VoiceManager.h"
 
-void Claps::Play(const uint8_t voice, const uint32_t noteOffset, uint32_t noteRange, const float velocity)
+void Claps::Play(const uint8_t voice, const uint32_t noteOffset, uint32_t noteRange, const float velocity, const float pitch)
 {
 	playing = true;
 
@@ -10,7 +10,7 @@ void Claps::Play(const uint8_t voice, const uint32_t noteOffset, uint32_t noteRa
 	state = State::hit1;
 	stateCounter = 0;
 
-	const float omega = 2.0f * config.filterCutoff / systemSampleRate;		// omega = cutoff in Hz / half sampling frequency
+	const float omega = std::min(2.0f * config.filterCutoff * pitch / systemSampleRate, 0.95f);		// omega = cutoff in Hz / half sampling frequency
 	filter.CalcCoeff(omega, config.filterQ);
 }
 
@@ -18,7 +18,7 @@ void Claps::Play(const uint8_t voice, const uint32_t noteOffset, uint32_t noteRa
 void Claps::Play(const uint8_t voice, const uint32_t index)
 {
 	// Called when button is pressed
-	Play(0, index, 0, 1.0f);
+	Play(0, index, 0, 1.0f, 1.0f);
 }
 
 

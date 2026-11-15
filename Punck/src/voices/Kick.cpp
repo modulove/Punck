@@ -4,22 +4,24 @@
 #include "VoiceManager.h"
 
 
-void Kick::Play(const uint8_t voice, const uint32_t noteOffset, const uint32_t noteRange, const float velocity)
+void Kick::Play(const uint8_t voice, const uint32_t noteOffset, const uint32_t noteRange, const float velocity, const float pitch)
 {
 	playing = true;
 	phase = Phase::Ramp1;
 	position = 0.0f;
 	currentLevel = 0.0f;
 	velocityScale = velocity * (static_cast<float>(ADC_array[ADC_KickLevel]) / 32768.0f);
-	slowSinInc = FreqToInc(config.initSlowSinFreq);
+	notePitch = pitch;
+	slowSinInc = FreqToInc(config.initSlowSinFreq * pitch);
 	slowSinLevel = 1.0f;
+	voiceManager.KickTriggered(velocity);		// Start sidechain ducking of other voices
 }
 
 
 void Kick::Play(const uint8_t voice, const uint32_t index)
 {
 	// Called when button is pressed
-	Play(0, 0, 0, 1.0f);
+	Play(0, 0, 0, 1.0f, 1.0f);
 }
 
 
@@ -54,7 +56,7 @@ void Kick::CalcOutput()
 		break;
 
 	case Phase::FastSine:
-		position += fastSinInc;
+		position += fastSinInc * notePitch;
 		currentLevel = std::sin(position);
 
 		if (position >= 1.5f * pi) {

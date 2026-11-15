@@ -266,75 +266,65 @@ void MidiHandler::ProcessSysex()
 void MidiHandler::midiEvent(const uint32_t data)
 {
 	auto midiData = MidiData(data);
-	MidiNote midiNote(midiData.db1, midiData.db2);
 
-	if (voiceManager.midiChannel == 0 || midiData.chn + 1 == voiceManager.midiChannel) {
-
-		switch (midiData.msg) {
-		case NoteOff:
-			break;
-
-		case NoteOn:
-			voiceManager.NoteOn(midiNote);
-			break;
-
-		case PitchBend:
-			pitchBend = static_cast<uint32_t>(midiData.db1) + (midiData.db2 << 7);
-			break;
+	if (midiData.msg == System) {
+		if (midiData.chn == 0x8) {								// 0xF8: MIDI clock tick
+			voiceManager.MidiClock();
 		}
+		return;
+	}
+
+	switch (midiData.msg) {
+	case NoteOff:
+		break;
+
+	case NoteOn:
+		voiceManager.NoteOn(MidiNote(midiData.db1, midiData.db2), midiData.chn);	// Channel routing happens in VoiceManager
+		break;
+
+	case PitchBend:
+		pitchBend = static_cast<uint32_t>(midiData.db1) + (midiData.db2 << 7);
+		break;
 	}
 }
 
 
 void MidiHandler::serialHandler(uint32_t data)
 {
-	Queue[QueueWrite] = data;			// Queue handles MIDI data divided into individual bytes
-	QueueSize++;
-	QueueWrite = (QueueWrite + 1) % SerialQueueSize;
+	// Byte-wise MIDI parser for the TRS input (called from UART interrupt).
+	// Upstream parser had no running status and broke when clock bytes arrived mid-message.
+	const uint8_t b = data & 0xFF;
 
-	MIDIType type = static_cast<MIDIType>(Queue[QueueRead] >> 4);
-	uint8_t channel = Queue[QueueRead] & 0x0F;
-
-	//NoteOn = 0x9, NoteOff = 0x8, PolyPressure = 0xA, ControlChange = 0xB, ProgramChange = 0xC, ChannelPressure = 0xD, PitchBend = 0xE, System = 0xF
-	while ((QueueSize > 2 && (type == NoteOn || type == NoteOff || type == PolyPressure ||  type == ControlChange ||  type == PitchBend)) ||
-		   (QueueSize > 1 && (type == ProgramChange || type == ChannelPressure))) {
-
-		MidiData event;
-		event.chn = channel;
-		event.msg = (uint8_t)type;
-
-		QueueInc();
-		event.db1 = Queue[QueueRead];
-		QueueInc();
-		if (type == ProgramChange || type == ChannelPressure) {
-			event.db2 = 0;
-		} else {
-			event.db2 = Queue[QueueRead];
-			QueueInc();
+	if (b >= 0xF8) {											// Realtime: can occur between any bytes, does not affect running status
+		if (b == 0xF8) {
+			voiceManager.MidiClock();
 		}
+		return;
+	}
 
+	if (b & 0x80) {												// Status byte
+		serialStatus = (b >= 0xF0) ? 0 : b;						// System common/SysEx cancels running status
+		serialCount = 0;
+		return;
+	}
+
+	if (serialStatus == 0) {									// Data byte without status (eg SysEx payload)
+		return;
+	}
+
+	serialData[serialCount++] = b;
+	const uint8_t type = serialStatus >> 4;
+	const uint8_t needed = (type == ProgramChange || type == ChannelPressure) ? 1 : 2;
+	if (serialCount >= needed) {
+		MidiData event;
+		event.data = 0;
+		event.chn = serialStatus & 0x0F;
+		event.msg = type;
+		event.db1 = serialData[0];
+		event.db2 = (needed == 2) ? serialData[1] : 0;
+		serialCount = 0;										// Keep status for running status
 		midiEvent(event.data);
-
-		type = static_cast<MIDIType>(Queue[QueueRead] >> 4);
-		channel = Queue[QueueRead] & 0x0F;
 	}
-
-	// Clock
-	if (QueueSize > 0 && Queue[QueueRead] == 0xF8) {
-		midiEvent(0xF800);
-		QueueInc();
-	}
-
-	//	handle unknown data in queue
-	if (QueueSize > 2 && type != 0x9 && type != 0x8 && type != 0xD && type != 0xE) {
-		QueueInc();
-	}
-}
-
-
-inline void MidiHandler::QueueInc() {
-	QueueSize--;
-	QueueRead = (QueueRead + 1) % SerialQueueSize;
 }
 
 

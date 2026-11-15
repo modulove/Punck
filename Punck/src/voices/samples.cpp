@@ -17,7 +17,7 @@ Samples::Samples()
 }
 
 
-void Samples::Play(const uint8_t sp, uint32_t noteOffset, const uint32_t noteRange, const float velocity)
+void Samples::Play(const uint8_t sp, uint32_t noteOffset, const uint32_t noteRange, const float velocity, const float pitch)
 {
 	if (fatTools.noFileSystem || (sampler[sp].bankLen == 0)) {
 		return;
@@ -26,23 +26,28 @@ void Samples::Play(const uint8_t sp, uint32_t noteOffset, const uint32_t noteRan
 
 	// Get sample from sorted bank list based on player and note offset
 	if (noteOffset == sampler[sp].bankLen && sampler[sp].bankLen > 1) {		// Random mode
-		noteOffset = RNG->DR % (sampler[sp].bankLen - 1);
+		noteOffset = RNG->DR % sampler[sp].bankLen;						// upstream used bankLen - 1: last sample never chosen
 	} else {
 		noteOffset = (noteOffset < sampler[sp].bankLen) ? noteOffset : 0;	// If no sample at index use first sample in bank
 	}
 	sampler[sp].sample = sampler[sp].bank[noteOffset].s;
 	sampler[sp].sampleAddress = sampler[sp].sample->startAddr;
-	sampler[sp].playbackSpeed = static_cast<float>(sampler[sp].sample->sampleRate) / systemSampleRate;
+	sampler[sp].fractionalPosition = 0.0f;
+	sampler[sp].playbackSpeed = pitch * static_cast<float>(sampler[sp].sample->sampleRate) / systemSampleRate;
 	sampler[sp].velocityScale = sampler[sp].sample->volume * velocity * (static_cast<float>(*sampler[sp].levelADC) / 32768.0f);
+}
+
+
+uint32_t Samples::KnobIndex(const uint8_t sp)
+{
+	return (*sampler[sp].voiceADC * (sampler[sp].bankLen + 1)) / 65536;		// Last position is random mode
 }
 
 
 void Samples::Play(const uint8_t sp, uint32_t index)
 {
 	// Samples played from button: use voice pot to determine note
-	index =  (*sampler[sp].voiceADC * (sampler[sp].bankLen + 1)) / 65536;		// Last position is random mode
-
-	Play(sp, index, 0, 1.0f);
+	Play(sp, KnobIndex(sp), 0, 1.0f, 1.0f);
 }
 
 

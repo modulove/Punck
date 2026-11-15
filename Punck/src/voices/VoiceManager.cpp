@@ -12,29 +12,34 @@ VoiceManager::VoiceManager()
 		noteMapper[i].voice = i;
 	}
 
+	// Default MIDI map matches the BeatStep Pro drum track (channel 10, pads on notes 36 - 51, GM-like where possible).
+	// Each voice also has a chromatic 'pitch channel' where note 60 plays the voice at its configured pitch.
 	NoteMapper& k = noteMapper[Voice::kick];
 	kickPlayer.noteMapper = &k;
 	k.drumVoice = &kickPlayer;
 	k.trigger = {GPIOB, 6, GPIOD, 1};
 	k.pwmLed = {&TIM8->CCR4};			// PC9: Blue
-	k.midiLow = 84;
-	k.midiHigh = 84;
+	k.midiLow = 36;						// Pad 1
+	k.midiHigh = 36;
+	k.pitchChannel = 11;
 
 	NoteMapper& s = noteMapper[Voice::snare];
 	snarePlayer.noteMapper = &s;
 	s.drumVoice = &snarePlayer;
 	s.trigger = {GPIOB, 5, GPIOD, 3};
 	s.pwmLed = {&TIM8->CCR3};			// PC8: Red
-	s.midiLow = 72;
-	s.midiHigh = 77;
+	s.midiLow = 37;						// Pads 2-3: tight, longer
+	s.midiHigh = 38;
+	s.pitchChannel = 12;
 
 	NoteMapper& hh = noteMapper[Voice::hihat];
 	hihatPlayer.noteMapper = &hh;
 	hh.drumVoice = &hihatPlayer;
 	hh.trigger = {GPIOE, 11, GPIOG, 10, GPIOD, 7};
 	hh.pwmLed = {&TIM8->CCR2};			// PC7: White
-	hh.midiLow = 78;
-	hh.midiHigh = 82;
+	hh.midiLow = 42;					// Pads 7-9: closed, half open, open
+	hh.midiHigh = 44;
+	hh.pitchChannel = 13;
 
 	NoteMapper& sa = noteMapper[samplerA];
 	samples.sampler[0].noteMapper = &sa;
@@ -42,8 +47,9 @@ VoiceManager::VoiceManager()
 	sa.voiceIndex = 0;
 	sa.trigger = {GPIOB, 7, GPIOE, 14};
 	sa.pwmLed = {&TIM4->CCR3};			// PD14: Green
-	sa.midiLow = 48;
-	sa.midiHigh = 55;
+	sa.midiLow = 45;					// Pads 10-12: bank A samples 1-3
+	sa.midiHigh = 47;
+	sa.pitchChannel = 16;				// Chromatic: plays the sample selected by the Voice pot
 
 	NoteMapper& sb = noteMapper[samplerB];
 	samples.sampler[1].noteMapper = &sb;
@@ -51,20 +57,24 @@ VoiceManager::VoiceManager()
 	sb.voiceIndex = 1;
 	sb.trigger = {GPIOG, 13, GPIOE, 15};
 	sb.pwmLed = {&TIM4->CCR4};			// PD15: Yellow
-	sb.midiLow = 60;
-	sb.midiHigh = 71;
+	sb.midiLow = 48;					// Pads 13-16: bank B samples 1-4; range continues to 87 (whole bank from a DAW)
+	sb.midiHigh = 87;
 
 	NoteMapper& t = noteMapper[Voice::toms];
 	tomsPlayer.noteMapper = &k;
 	t.drumVoice = &tomsPlayer;
-	t.midiLow = 56;
-	t.midiHigh = 59;
+	t.midiLow = 40;						// Pads 5-6: low, high
+	t.midiHigh = 41;
+	t.pitchChannel = 14;
 
 	NoteMapper& c = noteMapper[Voice::claps];
 	clapsPlayer.noteMapper = &c;
 	c.drumVoice = &clapsPlayer;
-	c.midiLow = 83;
-	c.midiHigh = 83;
+	c.midiLow = 39;						// Pad 4
+	c.midiHigh = 39;
+	c.pitchChannel = 15;
+
+	StoreMixConfig(nullptr, 0);			// Calculate ducking coefficients from defaults
 }
 
 
@@ -96,24 +106,27 @@ void VoiceManager::Output()
 	rightOutput = leftOutput;
 */
 
-	float combinedOutput[2] = {0.0f, 0.0f};
+	++sampleClock;
+	UpdateDuck();
+
+	// Mix buses: kick stays dry and unducked; drums, samplers and reverb return are ducked by the kick (sidechain)
+	float kickOut[2] = {kickPlayer.outputLevel[left], kickPlayer.outputLevel[right]};
+	float drumsOut[2] = {0.0f, 0.0f};
+	float samplesOut[2] = {samples.outputLevel[left], samples.outputLevel[right]};
 	for (auto& nm : noteMapper) {
-		if (nm.drumVoice != nullptr && nm.voiceIndex == 0) {			// If voiceIndex is > 0 drum voice has multiple channels (eg sampler)
-			combinedOutput[left]  += nm.drumVoice->outputLevel[left];
-			combinedOutput[right] += nm.drumVoice->outputLevel[right];
+		if (nm.drumVoice != nullptr && nm.voiceIndex == 0 && nm.voice != Voice::kick && nm.voice != Voice::samplerA) {
+			drumsOut[left]  += nm.drumVoice->outputLevel[left];
+			drumsOut[right] += nm.drumVoice->outputLevel[right];
 		}
 	}
-
-
-	if (std::abs(combinedOutput[left])  > 1.0f) { ++leftOverflow; }		// Debug
-	if (std::abs(combinedOutput[right]) > 1.0f) { ++rightOverflow; }
 
 	// reverb
 #if (TIMINGDEBUG)
 	uint32_t reverbStart = TIM3->CNT;
 #endif
 
-	auto [reverbL, reverbR] = reverb.Process(combinedOutput[left], combinedOutput[right]);
+	auto [reverbL, reverbR] = reverb.Process(drumsOut[left] + samplesOut[left] + mixConfig.kickReverbSend * kickOut[left],
+											 drumsOut[right] + samplesOut[right] + mixConfig.kickReverbSend * kickOut[right]);
 
 #if (TIMINGDEBUG)
 	reverbTime = TIM3->CNT - reverbStart;
@@ -122,9 +135,21 @@ void VoiceManager::Output()
 	}
 #endif
 
+	const float drumsGain   = 1.0f - mixConfig.duckDrums * duckLevel;
+	const float samplesGain = 1.0f - mixConfig.duckSamplers * duckLevel;
+	const float reverbGain  = 1.0f - mixConfig.duckReverb * duckLevel;
+
+	float combinedOutput[2];
+	for (uint8_t c = 0; c < 2; ++c) {
+		combinedOutput[c] = kickOut[c] + drumsGain * drumsOut[c] + samplesGain * samplesOut[c];
+	}
+
+	if (std::abs(combinedOutput[left])  > 1.0f) { ++leftOverflow; }		// Debug
+	if (std::abs(combinedOutput[right]) > 1.0f) { ++rightOverflow; }
+
 	// Apply some soft clipping
-	combinedOutput[left] = FastTanh(combinedOutput[left] + reverbL);
-	combinedOutput[right] = FastTanh(combinedOutput[right] + reverbR);
+	combinedOutput[left] = FastTanh(combinedOutput[left] + reverbGain * reverbL);
+	combinedOutput[right] = FastTanh(combinedOutput[right] + reverbGain * reverbR);
 
 
 	const float outputScale = 2147483648.0f * adjOutputScale;
@@ -160,8 +185,60 @@ float VoiceManager::FastTanh(const float x)
 }
 
 
-void VoiceManager::NoteOn(MidiHandler::MidiNote midiNote)
+void VoiceManager::KickTriggered(const float velocity)
 {
+	// Called from Kick::Play (always in the audio interrupt): softer kicks duck less
+	duckTarget = std::max(duckTarget, std::clamp(velocity, 0.0f, 1.0f));
+	duckHold = static_cast<uint32_t>(mixConfig.duckHoldMs * 0.001f * systemSampleRate);
+}
+
+
+void VoiceManager::UpdateDuck()
+{
+	if (duckHold > 0) {
+		--duckHold;
+	} else {
+		duckTarget *= duckReleaseCoef;
+	}
+	duckLevel += (duckTarget - duckLevel) * duckAttackCoef;
+}
+
+
+void VoiceManager::MidiClock()
+{
+	// Measure MIDI clock tick length in samples (24 ticks per quarter note) - used for tempo-synced effects
+	const uint32_t now = sampleClock;
+	const float interval = static_cast<float>(now - lastClockSample);
+	lastClockSample = now;
+	if (interval > 200.0f && interval < 12000.0f) {				// 10 - 600 BPM
+		clockTickSamples = (clockTickSamples == 0.0f) ? interval : 0.9f * clockTickSamples + 0.1f * interval;
+	} else {
+		clockTickSamples = 0.0f;								// Clock stopped or glitch: resynchronise
+	}
+}
+
+
+void VoiceManager::NoteOn(MidiHandler::MidiNote midiNote, const uint8_t channel)
+{
+	if (midiNote.velocity == 0) {								// Note on with velocity 0 is a note off
+		return;
+	}
+	const float velocity = static_cast<float>(midiNote.velocity) / 127.0f;
+
+	// Chromatic pitch channels: note 60 plays the voice at its configured pitch
+	bool pitched = false;
+	for (auto& nm : noteMapper) {
+		if (nm.pitchChannel != 0 && nm.pitchChannel == channel + 1 && nm.drumVoice != nullptr && buttonMode != ButtonMode::midiLearn) {
+			pitched = true;
+			const float ratio = std::exp2(static_cast<float>(static_cast<int32_t>(midiNote.noteValue) - pitchRefNote) / 12.0f);
+			const uint32_t offset = (nm.voice == samplerA || nm.voice == samplerB) ? samples.KnobIndex(nm.voiceIndex) : 0;
+			nm.drumVoice->QueuePlay(nm.voiceIndex, offset, 0, velocity, ratio);
+		}
+	}
+	if (pitched || (midiChannel != 0 && midiChannel != channel + 1)) {
+		return;
+	}
+
 	if (buttonMode == ButtonMode::midiLearn) {
 		NoteMapper& n = noteMapper[midiLearnVoice];
 		if (midiLearnState == MidiLearnState::lowNote) {
@@ -192,7 +269,7 @@ void VoiceManager::NoteOn(MidiHandler::MidiNote midiNote)
 				const uint32_t noteRange = note.midiHigh - note.midiLow + 1;
 
 				if (note.drumVoice) {
-					note.drumVoice->QueuePlay(note.voiceIndex, noteOffset, noteRange, static_cast<float>(midiNote.velocity) / 127.0f);
+					note.drumVoice->QueuePlay(note.voiceIndex, noteOffset, noteRange, velocity, 1.0f);
 				}
 			}
 		}
@@ -281,30 +358,59 @@ void VoiceManager::IdleTasks()
 }
 
 
-uint32_t VoiceManager:: GetConfig(uint8_t** buff)
+uint32_t VoiceManager::GetConfig(uint8_t** buff)
 {
-	// Return a pointer to config data for saving
+	// Return a pointer to MIDI map config data for saving (upstream's buffer was one byte short so the channel was never saved)
 	uint8_t i = 0;
 	for (auto& nm : noteMapper) {
 		config[i++] = nm.midiLow;
 		config[i++] = nm.midiHigh;
 	}
 	config[i++] = midiChannel;
+	for (auto& nm : noteMapper) {
+		config[i++] = nm.pitchChannel;
+	}
 	*buff = config;
 	return sizeof(config);
 }
 
 
-uint32_t VoiceManager:: StoreConfig(uint8_t* buff)
+void VoiceManager::StoreConfig(const uint8_t* buff, const uint32_t len)
 {
-	// Reads config data back into member values
-	uint8_t i = 0;
+	// Reads MIDI map config data back into member values (tolerates shorter, older blocks)
+	if (len < Voice::count * 2) {
+		return;
+	}
+	uint32_t i = 0;
 	for (auto& nm : noteMapper) {
 		nm.midiLow = buff[i++];
 		nm.midiHigh = buff[i++];
 	}
-	midiChannel = buff[i++];
-	return sizeof(config);
+	if (i < len) {
+		midiChannel = std::min(buff[i++], (uint8_t)16);
+	}
+	for (auto& nm : noteMapper) {
+		if (i < len) {
+			nm.pitchChannel = std::min(buff[i++], (uint8_t)16);
+		}
+	}
+}
+
+
+uint32_t VoiceManager::GetMixConfig(uint8_t** buff)
+{
+	*buff = reinterpret_cast<uint8_t*>(&mixConfig);
+	return sizeof(mixConfig);
+}
+
+
+void VoiceManager::StoreMixConfig(const uint8_t* buff, const uint32_t len)
+{
+	if (buff != nullptr) {
+		memcpy(&mixConfig, buff, std::min(len, (uint32_t)sizeof(mixConfig)));
+	}
+	const float releaseSamples = std::max(mixConfig.duckReleaseMs, 1.0f) * 0.001f * systemSampleRate;
+	duckReleaseCoef = std::exp(-1.0f / releaseSamples);
 }
 
 

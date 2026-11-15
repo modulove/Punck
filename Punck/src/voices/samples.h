@@ -52,8 +52,9 @@ public:
 	} sampler[2];
 
 	Samples();
-	void Play(const uint8_t player, const uint32_t noteOffset, uint32_t noteRange, const float velocity);
+	void Play(const uint8_t player, const uint32_t noteOffset, uint32_t noteRange, const float velocity, const float pitch);
 	void Play(const uint8_t player, const uint32_t sampleNo);
+	uint32_t KnobIndex(const uint8_t player);			// Sample index selected by the Voice pot (bankLen = random mode)
 	void CalcOutput();
 	bool UpdateSampleList();
 	uint32_t SerialiseSampleNames(uint8_t** buff, const uint8_t voiceIndex);

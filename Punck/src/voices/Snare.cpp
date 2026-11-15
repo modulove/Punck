@@ -1,7 +1,7 @@
 #include "Snare.h"
 #include "VoiceManager.h"
 
-void Snare::Play(const uint8_t voice, const uint32_t noteOffset, uint32_t noteRange, const float velocity)
+void Snare::Play(const uint8_t voice, const uint32_t noteOffset, uint32_t noteRange, const float velocity, const float pitch)
 {
 	playing = true;
 
@@ -9,7 +9,7 @@ void Snare::Play(const uint8_t voice, const uint32_t noteOffset, uint32_t noteRa
 	partialpos[1] = 0.0f;
 	partialpos[2] = 0.0f;
 
-	const float freq = (config.baseFreq * (static_cast<float>(ADC_array[ADC_SnareTuning]) / 65536.0f + 0.5f));
+	const float freq = pitch * (config.baseFreq * (static_cast<float>(ADC_array[ADC_SnareTuning]) / 65536.0f + 0.5f));
 
 	for (uint8_t i = 0; i < partialCount; ++i) {
 		partialLevel[i] = config.partialInitLevel[i];
@@ -26,7 +26,7 @@ void Snare::Play(const uint8_t voice, const uint32_t noteOffset, uint32_t noteRa
 void Snare::Play(const uint8_t voice, const uint32_t index)
 {
 	// Called when button is pressed
-	Play(0, index, 0, 1.0f);
+	Play(0, index, 0, 1.0f, 1.0f);
 }
 
 

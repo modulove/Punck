@@ -13,7 +13,9 @@ extern USB usb;
 // Class used to store calibration settings - note this uses the Standard Peripheral Driver code
 class Config {
 public:
-	static constexpr uint32_t configVersion = 6;
+	// Version 7 (modulove fork): tagged blocks {id, length, data} so blocks can grow without invalidating saved settings
+	static constexpr uint32_t configVersion = 7;
+	enum BlockId : uint16_t {blockVoiceBase = 0x10, blockReverb = 0x20, blockMidiMap = 0x21, blockMix = 0x22, blockSequences = 0x23};
 	static constexpr uint32_t BufferSize = 16384;
 	static constexpr bool eraseConfig = true;
 
@@ -26,6 +28,8 @@ public:
 	bool SaveConfig(bool eraseOnly = false);
 	uint32_t SetConfig();				// Serialise configuration data into buffer
 	void RestoreConfig();				// gets config from Flash, checks and updates settings accordingly
+
+	uint32_t AddBlock(uint32_t pos, const uint16_t id, const uint8_t* data, const uint32_t len);
 
 	void FlashUnlock(uint8_t bank);
 	void FlashLock(uint8_t bank);

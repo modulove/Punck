@@ -41,7 +41,6 @@ private:
 		GetStatus = 0x20, SaveConfig = 0x21, GetReverbConfig = 0x22, SetReverbConfig = 0x23};
 
 	void midiEvent(const uint32_t data);
-	void QueueInc();
 	void ProcessSysex();
 	uint32_t ConstructSysEx(const uint8_t* buffer, uint32_t len, const uint8_t* headerBuffer, const uint32_t headerLen, const bool noSplit);
 	uint32_t ReadCfgSysEx(uint8_t headerLength);
@@ -75,11 +74,10 @@ private:
 		};
 	};
 
-	static constexpr uint8_t SerialQueueSize = 50;
-	uint8_t Queue[SerialQueueSize];			// hold incoming serial MIDI bytes
-	uint8_t QueueRead = 0;
-	uint8_t QueueWrite = 0;
-	uint8_t QueueSize = 0;
+	// Serial (TRS) MIDI parser state: supports running status and realtime bytes interleaved in messages
+	uint8_t serialStatus = 0;				// Current running status (0 = none)
+	uint8_t serialData[2];
+	uint8_t serialCount = 0;
 
 	constexpr static uint32_t sysexMaxSize = 512;
 	uint8_t sysEx[sysexMaxSize];

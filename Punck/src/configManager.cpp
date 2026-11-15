@@ -52,6 +52,19 @@ bool Config::SaveConfig(bool eraseOnly)
 }
 
 
+uint32_t Config::AddBlock(uint32_t pos, const uint16_t id, const uint8_t* data, const uint32_t len)
+{
+	// Block layout: uint16 id, uint16 length, data padded to 4 bytes
+	if (pos + 4 + len + 8 > BufferSize) {
+		return pos;													// No room (leave space for footer)
+	}
+	*reinterpret_cast<uint16_t*>(&configBuffer[pos]) = id;
+	*reinterpret_cast<uint16_t*>(&configBuffer[pos + 2]) = static_cast<uint16_t>(len);
+	memcpy(&configBuffer[pos + 4], data, len);
+	return pos + 4 + ((len + 3) & ~3);
+}
+
+
 uint32_t Config::SetConfig()
 {
 	// Serialise config values into buffer
@@ -59,34 +72,30 @@ uint32_t Config::SetConfig()
 	strncpy(reinterpret_cast<char*>(configBuffer), "CFG", 4);		// Header
 	configBuffer[4] = configVersion;
 	uint32_t configPos = 8;											// Position in buffer to store data
-	uint32_t configSize = 0;										// Holds the size of each config buffer
 
 	uint8_t* cfgBuffer = nullptr;
 
-	// Voice configurations - store each one into config buffer
+	// Voice configurations (block id = base + voice number)
 	for (auto& nm : voiceManager.noteMapper) {
 		if (nm.drumVoice != nullptr && nm.voiceIndex == 0) {		// If voiceIndex is > 0 drum voice has multiple channels (eg sampler)
-
-			configSize = nm.drumVoice->SerialiseConfig(&cfgBuffer, nm.voiceIndex);
-			memcpy(&configBuffer[configPos], cfgBuffer, configSize);
-			configPos += configSize;
+			const uint32_t size = nm.drumVoice->SerialiseConfig(&cfgBuffer, nm.voiceIndex);
+			if (size > 0) {
+				configPos = AddBlock(configPos, static_cast<uint16_t>(blockVoiceBase) + nm.voice, cfgBuffer, size);
+			}
 		}
 	}
 
-	// Reverb settings
-	configSize = reverb.SerialiseConfig(&cfgBuffer);
-	memcpy(&configBuffer[configPos], cfgBuffer, configSize);
-	configPos += configSize;
+	uint32_t size = reverb.SerialiseConfig(&cfgBuffer);
+	configPos = AddBlock(configPos, blockReverb, cfgBuffer, size);
 
-	// MIDI note map
-	configSize = voiceManager.GetConfig(&cfgBuffer);
-	memcpy(&configBuffer[configPos], cfgBuffer, configSize);
-	configPos += configSize;
+	size = voiceManager.GetConfig(&cfgBuffer);
+	configPos = AddBlock(configPos, blockMidiMap, cfgBuffer, size);
 
-	// Drum sequences
-	configSize = sequencer.GetSequences(&cfgBuffer);
-	memcpy(&configBuffer[configPos], cfgBuffer, configSize);
-	configPos += configSize;
+	size = voiceManager.GetMixConfig(&cfgBuffer);
+	configPos = AddBlock(configPos, blockMix, cfgBuffer, size);
+
+	size = sequencer.GetSequences(&cfgBuffer);
+	configPos = AddBlock(configPos, blockSequences, cfgBuffer, size);
 
 	// Footer
 	strncpy(reinterpret_cast<char*>(&configBuffer[configPos]), "END", 4);
@@ -98,41 +107,51 @@ uint32_t Config::SetConfig()
 // Restore configuration settings from flash memory
 void Config::RestoreConfig()
 {
-	uint8_t* flashConfig = reinterpret_cast<uint8_t*>(addrFlashBank2Sector7);
+	// Initialise derived values from defaults first - stored blocks then override (shorter/older blocks keep new defaults)
+	for (auto& nm : voiceManager.noteMapper) {
+		if (nm.drumVoice != nullptr && nm.voiceIndex == 0) {
+			nm.drumVoice->StoreConfig(nullptr, 0);
+		}
+	}
+	reverb.StoreConfig(nullptr);
 
-	// Check for config start and version number
-	if (strcmp((char*)flashConfig, "CFG") == 0 && *reinterpret_cast<uint32_t*>(&flashConfig[4]) == configVersion) {
-		uint32_t configPos = 8;											// Position in buffer to store data
+	const uint8_t* flashConfig = reinterpret_cast<uint8_t*>(addrFlashBank2Sector7);
+	uint8_t* reverbCfg = nullptr;
+	const uint32_t reverbSize = reverb.SerialiseConfig(&reverbCfg);
 
-		// Voice configurations - store each one into config buffer
-		for (auto& nm : voiceManager.noteMapper) {
-			if (nm.voiceIndex == 0) {		// If voiceIndex is > 0 drum voice has multiple channels (eg sampler)
-				const uint32_t configSize = nm.drumVoice->ConfigSize();
-				nm.drumVoice->StoreConfig(&flashConfig[configPos], configSize);
-				configPos += configSize;
-			}
+	// Older versions (incl. upstream v5/v6) use a different layout: ignore them and run on defaults until saved
+	if (strcmp((const char*)flashConfig, "CFG") != 0 || flashConfig[4] != configVersion) {
+		return;
+	}
+
+	uint32_t pos = 8;
+	while (pos + 4 <= BufferSize) {
+		if (strncmp((const char*)&flashConfig[pos], "END", 4) == 0) {
+			break;
+		}
+		const uint16_t id  = *reinterpret_cast<const uint16_t*>(&flashConfig[pos]);
+		const uint16_t len = *reinterpret_cast<const uint16_t*>(&flashConfig[pos + 2]);
+		uint8_t* data = const_cast<uint8_t*>(&flashConfig[pos + 4]);
+		if (id == 0xFFFF || pos + 4 + len > BufferSize) {			// Erased flash or corrupt length
+			break;
 		}
 
-		// Reverb Settings
-		configPos += reverb.StoreConfig(&flashConfig[configPos]);
-
-		// MIDI note map
-		configPos += voiceManager.StoreConfig(&flashConfig[configPos]);
-
-		// Drum sequences
-		sequencer.StoreSequences(&flashConfig[configPos]);
-		configPos += sequencer.SequencesSize();
-	} else {
-		// Call Store Config to initialise values as required
-		for (auto& nm : voiceManager.noteMapper) {
-			if (nm.voiceIndex == 0) {		// If voiceIndex is > 0 drum voice has multiple channels (eg sampler)
-				nm.drumVoice->StoreConfig(nullptr, 0);
+		if (id >= blockVoiceBase && id < static_cast<uint16_t>(blockVoiceBase) + VoiceManager::Voice::count) {
+			auto& nm = voiceManager.noteMapper[id - blockVoiceBase];
+			if (nm.drumVoice != nullptr && nm.voiceIndex == 0) {
+				nm.drumVoice->StoreConfig(data, std::min((uint32_t)len, nm.drumVoice->ConfigSize()));
 			}
+		} else if (id == blockReverb && len >= reverbSize) {
+			reverb.StoreConfig(data);
+		} else if (id == blockMidiMap) {
+			voiceManager.StoreConfig(data, len);
+		} else if (id == blockMix) {
+			voiceManager.StoreMixConfig(data, len);
+		} else if (id == blockSequences && len == sequencer.SequencesSize()) {
+			sequencer.StoreSequences(data);
 		}
 
-		// Reverb Settings
-		reverb.StoreConfig(nullptr);
-
+		pos += 4 + ((len + 3) & ~3);
 	}
 }
 

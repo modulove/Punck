@@ -104,7 +104,8 @@ void CDCHandler::ProcessCommand()
 				"dir         -  Print list of all files and their directories\r\n"
 				"samplelist  -  Show details of all samples found in flash\r\n"
 				"midimap     -  Display MIDI note mapping\r\n"
-				"midichn:x   -  Set MIDI channel (0 = omni)\r\n"
+				"midichn:x   -  Set drum map MIDI channel (0 = omni)\r\n"
+				"pitchchn:v,c   Set chromatic channel c (0 = off) for voice v (1-7, order as midimap)\r\n"
 				"reboot      -  Reboot device\r\n"
 				"leds:x      -  Set all LEDs to brightness from 1-100%\r\n"
 				"revertleds  -  Reset all LEDs\r\n"
@@ -225,8 +226,19 @@ void CDCHandler::ProcessCommand()
 			printf("MIDI Channel: %d\r\n", voiceManager.midiChannel);
 		}
 
+	} else if (cmd.compare(0, 9, "pitchchn:") == 0) {			// Set chromatic MIDI channel for a voice
+		int v = 0, c = -1;
+		if (sscanf(cmd.data() + 9, "%d,%d", &v, &c) == 2 && v >= 1 && v <= VoiceManager::Voice::count && c >= 0 && c <= 16) {
+			voiceManager.noteMapper[v - 1].pitchChannel = c;
+			configManager.SaveConfig();
+			printf("Voice %d pitch channel: %d\r\n", v, c);
+		} else {
+			printf("Format: pitchchn:voice,channel  (voice 1-7, channel 0-16)\r\n");
+		}
+
 	} else if (cmd.compare("midimap") == 0) {					// Display MIDI note mapping
-		printf("MIDI mapping: Channel: %d\r\n", voiceManager.midiChannel);
+		printf("MIDI mapping: drum channel: %d (0 = omni); chromatic note %d = base pitch\r\n", voiceManager.midiChannel, VoiceManager::pitchRefNote);
+		printf("Voice      Low High  PitchChn\r\n");
 		for (auto note : voiceManager.noteMapper) {
 			switch (note.voice) {
 			case VoiceManager::kick:
@@ -251,7 +263,7 @@ void CDCHandler::ProcessCommand()
 				printf("Claps   ");
 				break;
 			}
-			printf(" : %3d, %3d\r\n", note.midiLow, note.midiHigh);
+			printf(" : %3d, %3d   %2d\r\n", note.midiLow, note.midiHigh, note.pitchChannel);
 		}
 
 

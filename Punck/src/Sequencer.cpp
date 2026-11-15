@@ -165,7 +165,7 @@ void Sequencer::Play()
 				auto& b = seq.bar[currentBar].beat[currentBeat][i];
 				if (b.level > 0) {
 					auto& note = voiceManager.noteMapper[i];
-					note.drumVoice->Play(note.voiceIndex, b.index, 0, static_cast<float>(b.level) / 127.0f);
+					note.drumVoice->Play(note.voiceIndex, b.index, 0, static_cast<float>(b.level) / 127.0f, 1.0f);
 				}
 			}
 		}

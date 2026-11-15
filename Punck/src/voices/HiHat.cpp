@@ -1,9 +1,10 @@
 #include <HiHat.h>
 #include "VoiceManager.h"
 #include <cstring>
+#include <cmath>
 
 
-void HiHat::Play(const uint8_t voice, const uint32_t noteOffset, uint32_t noteRange, const float velocity)
+void HiHat::Play(const uint8_t voice, const uint32_t noteOffset, uint32_t noteRange, const float velocity, const float pitch)
 {
 	playing = true;
 
@@ -18,15 +19,30 @@ void HiHat::Play(const uint8_t voice, const uint32_t noteOffset, uint32_t noteRa
 	lpFilter.Init();
 	lpFilterCutoff = config.lpInitCutoff;
 
-	// Control over decay note index sets initial level; scaled by pot
+	// Decay pot: top of travel randomises decay per hit; below that the pot is rescaled so its full range is still available
+	float pot = static_cast<float>(ADC_array[ADC_HiHatDecay]) / 65536.0f;
+	if (pot > config.randomThreshold) {
+		const float r = static_cast<float>(RNG->DR & 0xFFFFFF) / 16777216.0f;
+		pot = std::pow(r, config.randomSkew);					// skew > 1: mostly closed, occasionally open
+	} else {
+		pot /= config.randomThreshold;
+	}
+
+	// Note index sets how open the hat is (higher MIDI notes / open trigger = more open); pot shifts by +/-0.5
 	noteRange = noteRange == 0 ? 128 : noteRange;
-	float closed = sqrt((static_cast<float>(noteOffset) + 1.0f) / noteRange);		// store 0.0f - 1.0f to for amount closed
-	closed += (static_cast<float>(ADC_array[ADC_HiHatDecay]) / 65536.0f) - 0.5f;	// pot scales +/-0.5
-	decayScale = std::min(0.9985f + (0.0015f * closed), 0.99998f);
+	const float open = std::sqrt((static_cast<float>(noteOffset) + 1.0f) / noteRange) + pot - 0.5f;
+	decayScale = std::min(config.decayMin + (config.decayRange * open), config.decayMax);
+
+	// Ring modulated metallic layer fades in on open hats only, closed hats stay crisp
+	const float ringAmt = (open - config.ringModOpenStart) / (1.0f - config.ringModOpenStart);
+	ringLevel = config.ringModLevel * std::clamp(ringAmt, 0.0f, 1.0f);
+	gritCounter = 0;
+	gritSample = 0.0f;
 
 	for (uint8_t i = 0; i < 6; ++i) {
 		partialPos[i] = 0;
 		partialLevel[i] = config.partialScale[i];
+		partialPeriod[i] = static_cast<uint32_t>(freqToSqPeriod / (config.partialFreq[i] * pitch));
 	}
 }
 
@@ -34,7 +50,7 @@ void HiHat::Play(const uint8_t voice, const uint32_t noteOffset, uint32_t noteRa
 void HiHat::Play(const uint8_t voice, const uint32_t index)
 {
 	// Called when button is pressed
-	Play(0, index, 0, 1.0f);
+	Play(0, index, 0, 1.0f, 1.0f);
 }
 
 
@@ -60,6 +76,15 @@ void HiHat::CalcOutput()
 			}
 
 			currentLevel[left] += partialLevel[i];
+		}
+
+		// Ring modulation: products of square partial pairs give dense inharmonic sidebands; sample & hold adds aliasing grit
+		if (ringLevel > 0.0f) {
+			if (++gritCounter >= static_cast<uint32_t>(config.gritHold)) {
+				gritCounter = 0;
+				gritSample = partialLevel[0] * partialLevel[3] + partialLevel[1] * partialLevel[4] + partialLevel[2] * partialLevel[5];
+			}
+			currentLevel[left] += 2.0f * ringLevel * gritSample;
 		}
 
 
@@ -139,6 +164,7 @@ void HiHat::StoreConfig(uint8_t* buff, const uint32_t len)
 	for (uint8_t i = 0; i < 6; ++i) {
 		partialPeriod[i] = freqToSqPeriod / config.partialFreq[i];
 	}
+	config.gritHold = std::max(config.gritHold, 1.0f);
 }
 
 
@@ -146,5 +172,3 @@ uint32_t HiHat::ConfigSize()
 {
 	return sizeof(config);
 }
-
-

@@ -9,7 +9,7 @@ class NoteMapper;
 
 class Snare : public DrumVoice {
 public:
-	void Play(const uint8_t voice, const uint32_t noteOffset, uint32_t noteRange, const float velocity);
+	void Play(const uint8_t voice, const uint32_t noteOffset, uint32_t noteRange, const float velocity, const float pitch);
 	void Play(const uint8_t voice, const uint32_t index);
 	void CalcOutput();
 	void UpdateFilter();

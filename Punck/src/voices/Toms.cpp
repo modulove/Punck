@@ -4,7 +4,7 @@
 #include "VoiceManager.h"
 
 
-void Toms::Play(const uint8_t voice, const uint32_t noteOffset, const uint32_t noteRange, const float velocity)
+void Toms::Play(const uint8_t voice, const uint32_t noteOffset, const uint32_t noteRange, const float velocity, const float pitch)
 {
 	playing = true;
 	phase = Phase::Ramp;
@@ -12,11 +12,11 @@ void Toms::Play(const uint8_t voice, const uint32_t noteOffset, const uint32_t n
 	currentLevel = 0.0f;
 	velocityScale = velocity;
 
-	pitchScale = 1.0f + 1.5f * static_cast<float>(noteOffset) / (noteRange == 0 ? 128 : noteRange);
+	pitchScale = pitch * (1.0f + 1.5f * static_cast<float>(noteOffset) / (noteRange == 0 ? 128 : noteRange));
 
 	for (uint8_t i = 0; i < partialCount; ++i) {
 		position[i] = 2.0f;
-		sineInc[i] = config.sineFreqScale[1] * FreqToInc(config.baseFreq) * pitchScale;
+		sineInc[i] = config.sineFreqScale[i] * FreqToInc(config.baseFreq) * pitchScale;	// upstream used [1] for every partial
 		sineLevel[i] = config.sineInitLevel[i];
 	}
 }
@@ -25,7 +25,7 @@ void Toms::Play(const uint8_t voice, const uint32_t noteOffset, const uint32_t n
 void Toms::Play(const uint8_t voice, const uint32_t index)
 {
 	// Called when button is pressed
-	Play(0, 0, 0, 1.0f);
+	Play(0, 0, 0, 1.0f, 1.0f);
 }
 
 

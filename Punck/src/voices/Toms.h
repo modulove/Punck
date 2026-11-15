@@ -7,7 +7,7 @@ class NoteMapper;
 
 class Toms : public DrumVoice {
 public:
-	void Play(const uint8_t voice, const uint32_t noteOffset, const uint32_t noteRange, const float velocity);
+	void Play(const uint8_t voice, const uint32_t noteOffset, const uint32_t noteRange, const float velocity, const float pitch);
 	void Play(const uint8_t voice, const uint32_t index);
 	void CalcOutput();
 	void UpdateFilter();
@@ -32,9 +32,9 @@ private:
 	struct Config {
 		float decaySpeed[partialCount] = {0.9995f, 0.9993f};	// Volume decay speed
 		float rampInc = 0.2f;									// Initial wave steep ramp
-		float baseFreq = 60.0f;									// Initial frequency of sine wave
+		float baseFreq = 90.0f;									// Initial frequency of sine wave (60 Hz upstream, but upstream played partial 0 at 1.588x)
 		float sineFreqScale[partialCount] = {1.0f, 1.588f};		// Relative frequencies of partials
-		float sineInitLevel[partialCount] = {1.0f, 0.0f};		// Initial volume level
+		float sineInitLevel[partialCount] = {1.0f, 0.3f};		// Initial volume level (2nd partial adds tonal body)
 		float sineSlowDownRate = 0.99995f;						// Rate of decrease of sine frequency
 	} config;
 

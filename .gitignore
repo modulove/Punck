@@ -27,3 +27,6 @@ Punck/Drivers/FatFs/doc/*
 Hardware/\#auto_saved_files\#
 *.cyclo
 Punck/Debug/makefile
+
+# headless build output
+build/

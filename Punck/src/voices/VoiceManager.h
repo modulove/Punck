@@ -17,6 +17,7 @@ struct NoteMapper {
 	uint8_t voiceIndex = 0;				// For use with players that have multiple outputs (eg sampler)
 	uint8_t midiLow;
 	uint8_t midiHigh;
+	uint8_t pitchChannel = 0;			// MIDI channel (1-16) on which the voice is played chromatically (0 = off)
 
 	struct Trigger {
 		GPIO_TypeDef* btnGpioBank;
@@ -72,7 +73,9 @@ public:
 
 	VoiceManager();
 	void VoiceLED(Voice v, bool on);
-	void NoteOn(MidiHandler::MidiNote midiNote);
+	void NoteOn(MidiHandler::MidiNote midiNote, const uint8_t channel);	// channel 0-15
+	void KickTriggered(const float velocity);					// Starts sidechain ducking
+	void MidiClock();											// MIDI clock tick (24 ppqn)
 	void Output();
 	void CheckButtons();
 	void IdleTasks();
@@ -80,8 +83,10 @@ public:
 	void RestoreAllLeds();
 
 
-	uint32_t GetConfig(uint8_t** buff);							// Return a pointer to config data for saving
-	uint32_t StoreConfig(uint8_t* buff);						// Reads config data back into member values
+	uint32_t GetConfig(uint8_t** buff);							// Return a pointer to MIDI map config data for saving
+	void StoreConfig(const uint8_t* buff, const uint32_t len);	// Reads MIDI map config data back into member values
+	uint32_t GetMixConfig(uint8_t** buff);
+	void StoreMixConfig(const uint8_t* buff, const uint32_t len);
 
 	Kick kickPlayer;
 	Snare snarePlayer;
@@ -91,11 +96,32 @@ public:
 	Claps clapsPlayer;
 
 	NoteMapper noteMapper[Voice::count];
-	uint8_t midiChannel = 0;
+	uint8_t midiChannel = 10;									// Drum map channel 1-16 (0 = omni); 10 = BeatStep Pro drum track
+	static constexpr uint8_t pitchRefNote = 60;					// Chromatic channels play the configured pitch at this note
+
+	struct MixConfig {
+		float duckDrums = 0.35f;			// Kick sidechain depth on snare, hats, toms, claps (0 - 1)
+		float duckSamplers = 0.6f;			// Depth on both samplers
+		float duckReverb = 0.7f;			// Depth on reverb return
+		float duckHoldMs = 25.0f;			// Time at full depth after each kick
+		float duckReleaseMs = 160.0f;		// Release time constant
+		float kickReverbSend = 0.0f;		// Kick into main reverb (0 = dry kick, rumble has its own path)
+	} mixConfig;
+
+	float duckLevel = 0.0f;										// Current duck amount (0 - 1)
+	volatile uint32_t sampleClock = 0;							// Counts output samples (48kHz)
+	float clockTickSamples = 0.0f;								// Smoothed MIDI clock tick length in samples (0 = no clock)
 
 private:
 	float FastTanh(const float x);
-	uint8_t config[Voice::count * 2];							// Buffer to store config data (currently used to store midi note mapping]
+	void UpdateDuck();
+	uint8_t config[Voice::count * 3 + 1];						// MIDI map: low/high note per voice, drum channel, pitch channel per voice
+
+	float duckTarget = 0.0f;
+	uint32_t duckHold = 0;
+	float duckReleaseCoef = 0.9998f;
+	static constexpr float duckAttackCoef = 0.02f;				// ~1ms attack avoids clicks on ducked voices
+	uint32_t lastClockSample = 0;
 
 	enum class ButtonMode {playNote, midiLearn, drumPattern};
 	enum class MidiLearnState {off, lowNote, highNote};

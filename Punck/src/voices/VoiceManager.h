@@ -100,9 +100,9 @@ public:
 	static constexpr uint8_t pitchRefNote = 60;					// Chromatic channels play the configured pitch at this note
 
 	struct MixConfig {
-		float duckDrums = 0.35f;			// Kick sidechain depth on snare, hats, toms, claps (0 - 1)
-		float duckSamplers = 0.6f;			// Depth on both samplers
-		float duckReverb = 0.7f;			// Depth on reverb return
+		float duckDrums = 0.0f;				// Kick sidechain depth on snare, hats, toms, claps (0 - 1); off by default
+		float duckSamplers = 0.0f;			// Depth on both samplers
+		float duckReverb = 0.0f;			// Depth on reverb return
 		float duckHoldMs = 25.0f;			// Time at full depth after each kick
 		float duckReleaseMs = 160.0f;		// Release time constant
 		float kickReverbSend = 0.0f;		// Kick into main reverb (0 = dry kick, rumble has its own path)

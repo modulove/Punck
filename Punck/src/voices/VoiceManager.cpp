@@ -335,7 +335,11 @@ void VoiceManager::CheckButtons()
 					note.drumVoice->Play(note.voiceIndex, triggerType == NoteMapper::TriggerType::trigger2 ? 128 : 0);
 
 				} else if (buttonMode == ButtonMode::drumPattern) {
-					sequencer.StartStop(note.voice);
+					if (sequencer.IsEmpty(note.voice)) {
+						note.drumVoice->Play(note.voiceIndex, 0);		// No pattern stored on this button: play the sound instead
+					} else {
+						sequencer.StartStop(note.voice);
+					}
 				}
 			}
 		} else {

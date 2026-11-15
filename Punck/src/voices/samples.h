@@ -40,6 +40,9 @@ public:
 		Sample* sample;
 		const uint8_t* sampleAddress;
 		float playbackSpeed;				// Multiplier to allow faster or slow playback (and compensate for non 48k samples)
+		bool semitoneSteps = false;			// Key on and tune mode set: speed pot moves in semitone steps
+		uint16_t lastTuningADC = 0xFFFF;
+		float steppedSpeed = 1.0f;
 		float fractionalPosition;			// When playing sample at varying rate store how far through the current sample playback is
 		int32_t currentSamples[2] = {};		// Left/right sample levels for mixing
 		uint32_t bankLen;					// Number of samples in bank

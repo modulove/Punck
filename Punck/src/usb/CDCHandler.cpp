@@ -268,7 +268,9 @@ void CDCHandler::ProcessCommand()
 	} else if (cmd.compare(0, 3, "mix") == 0) {					// Show or set master bus / ducking parameters: mix or mix:index,value
 		static constexpr const char* names[] = {"duckDrums", "duckSamplers", "duckReverb", "duckHoldMs", "duckReleaseMs", "kickReverbSend",
 				"compOn", "compThreshold dB", "compRatio", "compAttack ms", "compRelease ms", "compKnee dB", "compMakeup dB", "compMix",
-				"compScHpf Hz", "compKick", "clipMode 0 tanh 1 clean 2 hard 3 warm", "clipDrive dB", "outTrim dB", "inputTrim dB"};
+				"compScHpf Hz", "compKick", "clipMode 0 tanh 1 clean 2 hard 3 warm", "clipDrive dB", "outTrim dB", "inputTrim dB",
+				"keyRoot -1 off, 0 C .. 11 B", "keyScale 0 min 1 dor 2 phr ..", "tune kick 0 off 1 root 2 r+5 3 scale 4 pent",
+				"tune snare", "tune hats", "tune sample A", "tune sample B", "tune toms / bass", "tune claps"};
 		constexpr uint32_t count = sizeof(VoiceManager::MixConfig) / sizeof(float);
 		static_assert(sizeof(names) / sizeof(names[0]) == count, "mix names out of sync with MixConfig");
 		float* values = reinterpret_cast<float*>(&voiceManager.mixConfig);

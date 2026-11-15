@@ -34,7 +34,7 @@ void HiHat::Play(const uint8_t voice, const uint32_t noteOffset, uint32_t noteRa
 	if (engine != classic) {
 		// Plaits hats: open amount (-0.41 closed .. 1.5 fully open) mapped onto Plaits decay
 		morph = std::clamp(config.plaitsDecayBase + config.plaitsDecayScale * open, 0.0f, std::clamp(config.plaitsDecayMax, 0.0f, 1.0f));
-		f0 = std::min(config.pitch * pitch / systemSampleRate, 0.1f);
+		f0 = std::min(voiceManager.Tune(VoiceManager::hihat, config.pitch * pitch) / systemSampleRate, 0.1f);
 		accent = std::clamp(velocity, 0.0f, 1.0f);
 		trigger = true;
 		idle = false;

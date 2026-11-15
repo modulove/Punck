@@ -41,6 +41,7 @@ void Toms::Play(const uint8_t voice, const uint32_t noteOffset, const uint32_t n
 	velocityScale = velocity;
 
 	pitchScale = pitch * (1.0f + 1.5f * static_cast<float>(noteOffset) / (noteRange == 0 ? 128 : noteRange));
+	pitchScale = voiceManager.Tune(VoiceManager::toms, config.baseFreq * pitchScale) / config.baseFreq;
 
 	for (uint8_t i = 0; i < partialCount; ++i) {
 		position[i] = 2.0f;
@@ -60,7 +61,7 @@ void Toms::Play(const uint8_t voice, const uint32_t index)
 void Toms::BassNote(const float ratio, const float velocity)
 {
 	// Once per note: envelopes restart from their current level (no click on fast repeats), oscillator phase runs on
-	oscInc = std::min(config.bassPitch * ratio / systemSampleRate, 0.2f);
+	oscInc = std::min(voiceManager.Tune(VoiceManager::toms, config.bassPitch * ratio) / systemSampleRate, 0.2f);
 	ampPeak = std::clamp(velocity, 0.0f, 1.0f) * config.bassLevel;
 	ampAttack = true;
 	ampCoef = dyn::DecayCoef(std::max(config.bassDecay, 10.0f));

@@ -9,6 +9,7 @@
 #include "Toms.h"
 #include "Claps.h"
 #include "Dynamics.h"
+#include "Harmony.h"
 #include <cstring>
 
 struct NoteMapper {
@@ -132,6 +133,11 @@ public:
 		float clipDrive = 2.0f;				// dB into the clipper
 		float outTrim = 0.0f;				// dB after the clipper (up to +0.7 dB = DAC full scale)
 		float inputTrim = 0.0f;				// dB on the whole mix before compressor and clipper (gain staging for hot pots)
+
+		// Key & scale: tonal voices snap their pitch (config pitch, MIDI notes, tuning pots) to the key
+		float keyRoot = -1.0f;				// -1 = off, 0 = C ... 11 = B
+		float keyScale = 0.0f;				// see scaleMasks: 0 minor (Aeolian), 1 Dorian, 2 Phrygian, ...
+		float tuneMode[Voice::count] = {2, 3, 0, 0, 0, 3, 0};	// per voice: 0 off, 1 root, 2 root + 5th, 3 scale, 4 pentatonic subset
 	} mixConfig;
 
 	struct Meter {
@@ -154,6 +160,10 @@ public:
 			profMax[block] = cycles;
 		}
 	}
+
+	// Key & scale: returns hz snapped to the voice's allowed notes (unchanged when the key is off or the voice mode is 0)
+	float Tune(const Voice v, const float hz) const;
+	bool TuneActive(const Voice v) const { return tuneRoot >= 0 && tuneMask[v] != 0; }
 
 	// Test and calibration helpers (console)
 	void RequestEngine(const uint8_t voice, const uint8_t engine);	// Applied in the audio interrupt (blinks like a long press)
@@ -183,6 +193,8 @@ private:
 	float clipGain = 1.0f;
 	float outGain = 1.0f;
 	float inGain = 1.0f;
+	uint16_t tuneMask[Voice::count] = {};						// allowed pitch classes relative to the key root (from tuneMode)
+	int32_t tuneRoot = -1;
 	float meterReduction = 0.0f, meterClip = 0.0f, meterPeak = 0.0f;
 
 	// Long press engine switching and LED feedback. The hold is timed from the button level itself (not the

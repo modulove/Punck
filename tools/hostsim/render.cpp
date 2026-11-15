@@ -355,6 +355,35 @@ int main(int argc, char** argv)
 		printf("Config sizes (bytes): kick %u snare %u hats %u toms %u\n", (unsigned)r.kick.ConfigSize(), (unsigned)r.snare.ConfigSize(),
 				(unsigned)r.hat.ConfigSize(), (unsigned)r.toms.ConfigSize());
 	}
+	{
+		// Key & scale: what the voices' default pitches snap to
+		static const char* names[] = {"C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"};
+		static char bufs[4][16];
+		static int bi = 0;
+		auto noteName = [](float hz) {
+			char* buf = bufs[bi++ % 4];
+			const int n = static_cast<int>(std::lround(69.0 + 12.0 * std::log2(hz / 440.0)));
+			snprintf(buf, 16, "%s%d", names[(n + 120) % 12], n / 12 - 1);
+			return buf;
+		};
+		const uint32_t modes[VoiceManager::count] = {2, 3, 0, 0, 0, 3, 0};
+		printf("Key & scale check (default tune modes: kick root+5th, snare scale, toms/bass scale):\n");
+		for (int32_t root : {5, 9, 0}) {
+			for (uint32_t scale : {0u, 1u, 2u}) {
+				voiceManager.SetKey(root, scale, modes);
+				const float k = voiceManager.Tune(VoiceManager::kick, 49.0f), b = voiceManager.Tune(VoiceManager::toms, 41.2f);
+				const float s = voiceManager.Tune(VoiceManager::snare, 200.0f);
+				printf("  %-2s %-9s kick 49 Hz -> %5.1f Hz %-4s  bass 41.2 Hz -> %5.1f Hz %-4s  snare 200 Hz -> %5.1f Hz %s\n", names[root],
+						scale == 0 ? "minor" : scale == 1 ? "dorian" : "phrygian", k, noteName(k), b, noteName(b), s, noteName(s));
+			}
+		}
+		// Tuning pot sweep in F minor (snare mode scale): every semitone of the pot range lands on a scale note
+		voiceManager.SetKey(5, 0, modes);
+		printf("  F minor, snare Tuning pot 100 .. 400 Hz in semitones ->");
+		for (int st = 0; st <= 24; st += 2) printf(" %s", noteName(voiceManager.Tune(VoiceManager::snare, 100.0f * std::pow(2.0f, st / 12.0f))));
+		printf("\n");
+		voiceManager.SetKey(-1, 0, modes);
+	}
 	RenderKickEngines(dir);
 	RenderSnares(dir);
 

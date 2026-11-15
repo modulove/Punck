@@ -131,7 +131,8 @@ const STRUCTS = {
   Reverb: { voice: -1, fields: [["reverbLevel",1],["mixerBaseDelay",1],["diffuserCount",1],["mixerChannels",1],["filterCutoff",1]] },
   Mix:    { voice: -2, fields: [["duckDrums",1],["duckSamplers",1],["duckReverb",1],["duckHoldMs",1],["duckReleaseMs",1],["kickReverbSend",1],
             ["compOn",1],["compThreshold",1],["compRatio",1],["compAttack",1],["compRelease",1],["compKnee",1],["compMakeup",1],["compMix",1],
-            ["compScHpf",1],["compKick",1],["clipMode",1],["clipDrive",1],["outTrim",1],["inputTrim",1]] },
+            ["compScHpf",1],["compKick",1],["clipMode",1],["clipDrive",1],["outTrim",1],["inputTrim",1],
+            ["keyRoot",1],["keyScale",1],["tuneMode",7]] },
 };
 
 // ---------------------------------------------------------------------------------------------
@@ -183,7 +184,8 @@ const NEWDEF = {
            randomZone: 0.1, randomLongMin: 0.08, randomLongMax: 0.6, randomBase: 0.25, plaitsDecayBase: 0.05, plaitsDecayScale: 0.45, plaitsDecayMax: 0.7 },
   Mix: { duckDrums: 0, duckSamplers: 0, duckReverb: 0, duckHoldMs: 25, duckReleaseMs: 160, kickReverbSend: 0,
          compOn: 1, compThreshold: -12, compRatio: 3, compAttack: 15, compRelease: 120, compKnee: 6, compMakeup: 3, compMix: 1,
-         compScHpf: 90, compKick: 0, clipMode: 1, clipDrive: 2, outTrim: 0, inputTrim: 0 },
+         compScHpf: 90, compKick: 0, clipMode: 1, clipDrive: 2, outTrim: 0, inputTrim: 0,
+         keyRoot: -1, keyScale: 0, tuneMode: [2, 3, 0, 0, 0, 3, 0] },
 };
 for (const s in NEWDEF) FACTORY[s] = { ...NEWDEF[s], ...FACTORY[s] };
 // Engine choices on top of the existing presets
@@ -238,6 +240,7 @@ const CONV = {
   chans:  { toRaw: v => [0, 4, 8][Math.round(v)], fromRaw: r => r >= 8 ? 2 : r >= 4 ? 1 : 0 },
 };
 const NOTE_NAMES = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"];
+const SCALES = ["minor", "dorian", "phrygian", "phryg dom", "harm minor", "min pent", "major", "mixolyd", "lydian", "maj pent", "quartal"];
 function noteName(hz) { const n = Math.round(12 * Math.log2(hz / 440) + 69); return NOTE_NAMES[(n + 120) % 12] + (Math.floor(n / 12) - 1); }
 function fmt(v, unit) {
   switch (unit) {
@@ -257,6 +260,9 @@ function fmt(v, unit) {
     case "clip": return ["tanh", "clean", "hard", "warm"][Math.round(v)];
     case "fx": return ["soft", "hard", "fold"][Math.round(v)];
     case "follow": return ["off", "K-B-", "KBBB", "KBB-", "K-BB", "KB-B"][Math.round(v)];
+    case "key": return Math.round(v) < 0 ? "off" : NOTE_NAMES[Math.round(v) % 12];
+    case "scale": return SCALES[Math.round(v)] || "?";
+    case "tmode": return ["off", "root", "root+5", "scale", "pent"][Math.round(v)];
     case "curve": return v < 0.2 ? "808 " + v.toFixed(2) : v > 0.8 ? "909 " + v.toFixed(2) : v.toFixed(2);
     default: return v.toFixed(Math.abs(v) < 1 ? 3 : 2);
   }
@@ -418,6 +424,16 @@ const UI = {
     ["Duck rel", "duckReleaseMs", 0, "lin", "ms", 20, 1000, "log"],
     ["Kick→verb", "kickReverbSend", 0, "lin", "", 0, 1, "lin"],
   ]},
+  Key: { title: "Key & scale", struct: "Mix", noDice: true, hint: "Tonal voices snap to the key: configured pitch, MIDI notes and the snare Tuning pot (steps through the scale). Kick root+5 keeps the low end on root or fifth. Samplers: speed pot in semitone steps. Key off = free pitch as before.", controls: [
+    ["Key", "keyRoot", 0, "lin", "key", -1, 11, "lin"],
+    ["Scale", "keyScale", 0, "lin", "scale", 0, 10, "lin"],
+    ["Kick", "tuneMode", 0, "lin", "tmode", 0, 4, "lin"],
+    ["Snare", "tuneMode", 1, "lin", "tmode", 0, 4, "lin"],
+    ["Hats", "tuneMode", 2, "lin", "tmode", 0, 4, "lin"],
+    ["Toms/bass", "tuneMode", 5, "lin", "tmode", 0, 4, "lin"],
+    ["Sample A", "tuneMode", 3, "lin", "tmode", 0, 4, "lin"],
+    ["Sample B", "tuneMode", 4, "lin", "tmode", 0, 4, "lin"],
+  ]},
   Reverb: { title: "Reverb", hint: "Whole mix (stock fw sends the kick too - keep it low for techno).", controls: [
     ["Level", "reverbLevel", 0, "pct", "%", 0, 5, "lin"],
     ["Size", "mixerBaseDelay", 0, "lin", "int", 20, 150, "lin"],
@@ -546,6 +562,7 @@ async function readAll() {
     try { decodeStruct("Mix", await request([0xF0, CMD.GetMixConfig, 0, 0xF7], "mix", 0)); mixSupported = true; }
     catch (e) { mixSupported = false; log("No master bus on this firmware (needs the modulove compressor build)"); }
     sections.Mix.style.display = mixSupported ? "" : "none";
+    sections.Key.style.display = mixSupported && hasField("Mix", "keyRoot") ? "" : "none";
     refreshKnobs(); log("Read settings from Punck");
   } catch (e) { log("Read failed (" + e.message + ") - is the module running and the port free?"); }
 }
@@ -585,7 +602,7 @@ function makeKnob(parent, voice, def) {
   k.value = () => k.conv.fromRaw(getRaw(voice, field, idx));
   k.set = (v, send = true) => {
     v = Math.min(max, Math.max(min, v));
-    if (["int", "onoff", "clip", "fx", "follow"].includes(unit) || conv === "chans") v = Math.round(v);
+    if (["int", "onoff", "clip", "fx", "follow", "key", "scale", "tmode"].includes(unit) || conv === "chans") v = Math.round(v);
     setRaw(voice, field, idx, k.conv.toRaw(v));
     if (send) queueSend(voice);
     refreshKnobs(voice);
@@ -654,8 +671,8 @@ function randomise(voice, amount, wild) {
 // Build UI
 // ---------------------------------------------------------------------------------------------
 const main = document.getElementById("main"), padsEl = document.getElementById("pads");
-for (const s of ["Mix", "Kick", "Snare", "HiHat", "Toms", "Claps", "Reverb"]) {
-  const u = UI[s];
+for (const s of ["Mix", "Key", "Kick", "Snare", "HiHat", "Toms", "Claps", "Reverb"]) {
+  const u = UI[s], st = u.struct || s;          // st: config struct the knobs edit
   const sec = document.createElement("section"); sec.className = "voice";
   const engSel = ENGINES[s] ? `<select class="engine small" title="Sound engine (same as long press on the voice button)">${ENGINES[s].map((n, i) => `<option value="${i}">${i + 1} ${n}</option>`).join("")}</select>` : "";
   const masterSel = s === "Mix" ? `<select class="mpreset small" title="Master bus starting points">${Object.keys(MASTER_PRESETS).map(n => `<option>${n}</option>`).join("")}</select>` : "";
@@ -673,7 +690,7 @@ for (const s of ["Mix", "Kick", "Snare", "HiHat", "Toms", "Claps", "Reverb"]) {
   const es = sec.querySelector(".engine");
   if (es) es.onchange = () => { pushUndo(); state[s].engine = +es.value; sendStruct(s); refreshKnobs(s); log(`${u.title}: engine ${ENGINES[s][+es.value]}`); };
   const kd = sec.querySelector(".knobs");
-  u.controls.forEach(c => makeKnob(kd, s, c));
+  u.controls.forEach(c => makeKnob(kd, st, c));
   if (u.advanced) {
     const det = document.createElement("details"); det.innerHTML = "<summary>Individual partials (overrides Metal macros)</summary><div class='knobs'></div>";
     sec.appendChild(det); u.advanced.forEach(c => makeKnob(det.querySelector(".knobs"), s, c));

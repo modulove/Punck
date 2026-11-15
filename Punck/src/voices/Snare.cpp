@@ -16,7 +16,7 @@ void Snare::Play(const uint8_t voice, const uint32_t noteOffset, uint32_t noteRa
 		partialpos[1] = 0.0f;
 		partialpos[2] = 0.0f;
 
-		const float freq = pitch * (config.baseFreq * (tuning + 0.5f));
+		const float freq = voiceManager.Tune(VoiceManager::snare, pitch * (config.baseFreq * (tuning + 0.5f)));	// Tuning pot steps through the key
 		for (uint8_t i = 0; i < partialCount; ++i) {
 			partialLevel[i] = config.partialInitLevel[i];
 			partialInc[i] = FreqToInc(freq * config.partialFreqOffset[i]);
@@ -28,7 +28,7 @@ void Snare::Play(const uint8_t voice, const uint32_t noteOffset, uint32_t noteRa
 	}
 
 	// Sample based engines: Tuning knob = x0.5 .. x2 around config pitch, Filter knob = snappy
-	const float hz = config.pitch * pitch * dyn::FastExp2((tuning - 0.5f) * 2.0f);
+	const float hz = voiceManager.Tune(VoiceManager::snare, config.pitch * pitch * dyn::FastExp2((tuning - 0.5f) * 2.0f));
 	f0 = std::min(hz / systemSampleRate, 0.15f);
 	snappy = static_cast<float>(ADC_array[ADC_SnareFilter]) / 65536.0f;
 	accent = std::clamp(velocity, 0.0f, 1.0f);

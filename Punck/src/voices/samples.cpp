@@ -2,6 +2,7 @@
 #include "samples.h"
 #include "FatTools.h"
 #include "VoiceManager.h"
+#include "Dynamics.h"
 #include <cstring>
 #include <cmath>
 
@@ -34,6 +35,7 @@ void Samples::Play(const uint8_t sp, uint32_t noteOffset, const uint32_t noteRan
 	sampler[sp].sampleAddress = sampler[sp].sample->startAddr;
 	sampler[sp].fractionalPosition = 0.0f;
 	sampler[sp].playbackSpeed = pitch * static_cast<float>(sampler[sp].sample->sampleRate) / systemSampleRate;
+	sampler[sp].semitoneSteps = voiceManager.TuneActive(sp == playerA ? VoiceManager::samplerA : VoiceManager::samplerB);
 	sampler[sp].velocityScale = sampler[sp].sample->volume * velocity * (static_cast<float>(*sampler[sp].levelADC) / 32768.0f);
 }
 
@@ -92,8 +94,15 @@ void Samples::CalcOutput()
 				sp.currentSamples[right] = sp.currentSamples[left];		// Duplicate left channel to right for mono signal
 			}
 
-			// Get sample speed from ADC - want range 0.5 - 1.5
-			const float adjSpeed = 0.5f + static_cast<float>(*sp.tuningADC) / 65536.0f;
+			// Get sample speed from ADC - want range 0.5 - 1.5 (key on and sampler tune mode set: semitone steps)
+			float adjSpeed = 0.5f + static_cast<float>(*sp.tuningADC) / 65536.0f;
+			if (sp.semitoneSteps) {
+				if (*sp.tuningADC != sp.lastTuningADC) {
+					sp.lastTuningADC = *sp.tuningADC;
+					sp.steppedSpeed = dyn::FastExp2(std::round(12.0f * dyn::FastLog2(adjSpeed)) / 12.0f);
+				}
+				adjSpeed = sp.steppedSpeed;
+			}
 
 			// Split the next position into an integer jump and fractional position
 			float addressJump;			// Integral part of position

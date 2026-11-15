@@ -186,7 +186,9 @@ void Kick::Play(const uint8_t voice, const uint32_t noteOffset, const uint32_t n
 {
 	playing = true;
 	velocityScale = velocity * (static_cast<float>(ADC_array[ADC_KickLevel]) / 32768.0f);
-	notePitch = pitch;
+	// Key & scale: the hit's fundamental snaps to the key (notePitch then carries the tuned ratio for every engine)
+	const float baseHz = (engine == classic) ? config.initSlowSinFreq : config.pitch;
+	notePitch = voiceManager.Tune(VoiceManager::kick, baseHz * pitch) / baseHz;
 	accent = std::clamp(velocity, 0.0f, 1.0f);
 	trigger = true;
 
@@ -201,7 +203,7 @@ void Kick::Play(const uint8_t voice, const uint32_t noteOffset, const uint32_t n
 		phase = Phase::Ramp1;
 		position = 0.0f;
 		currentLevel = 0.0f;
-		slowSinInc = FreqToInc(config.initSlowSinFreq * pitch);
+		slowSinInc = FreqToInc(config.initSlowSinFreq * notePitch);
 		slowSinLevel = 1.0f;
 		break;
 

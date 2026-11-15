@@ -3,6 +3,9 @@
 #include "Sequencer.h"
 #include "reverb.h"
 
+
+
+
 VoiceManager voiceManager;
 
 
@@ -599,6 +602,26 @@ void VoiceManager::StoreMixConfig(const uint8_t* buff, const uint32_t len)
 	clipGain = std::pow(10.0f, std::clamp(m.clipDrive, -12.0f, 24.0f) / 20.0f);
 	outGain = std::pow(10.0f, std::clamp(m.outTrim, -24.0f, maxOutTrimDb) / 20.0f);	// > 0 dB only up to DAC full scale
 	inGain = std::pow(10.0f, std::clamp(m.inputTrim, -24.0f, 12.0f) / 20.0f);
+
+	// Key & scale: allowed pitch classes per voice
+	tuneRoot = (m.keyRoot < -0.5f) ? -1 : static_cast<int32_t>(m.keyRoot + 0.5f) % 12;
+	const uint32_t scale = static_cast<uint32_t>(std::max(m.keyScale + 0.5f, 0.0f));
+	for (uint32_t v = 0; v < Voice::count; ++v) {
+		tuneMask[v] = harmony::ModeMask(static_cast<uint32_t>(std::clamp(m.tuneMode[v], 0.0f, 4.0f) + 0.5f), scale);
+	}
+}
+
+
+
+
+
+float VoiceManager::Tune(const Voice v, const float hz) const
+{
+	if (tuneRoot < 0 || hz <= 0.0f || tuneMask[v] == 0) {
+		return hz;
+	}
+	const float note = 69.0f + 12.0f * std::log2(hz / 440.0f);					// fractional MIDI note (precise: decides ties)
+	return 440.0f * dyn::FastExp2((harmony::QuantizeNote(note, tuneRoot, tuneMask[v]) - 69.0f) / 12.0f);
 }
 
 

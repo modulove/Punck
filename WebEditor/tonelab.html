@@ -59,7 +59,7 @@ input[type=range] { accent-color: var(--accent); width: 90px; }
   <div class="group">
     <button id="btnConnect" class="primary">Connect</button>
     <button id="btnRead" title="Read current settings from the module">Read</button>
-    <button id="btnSave" title="Write current settings to the module's internal flash (survives power off)">Save to Punck</button>
+    <button id="btnSave" title="Settings save themselves 3 s after the last change (modulove fw). This saves immediately.">Save now</button>
   </div>
   <div class="group">
     <label>Preset</label>
@@ -721,7 +721,6 @@ document.getElementById("btnConnect").onclick = connect;
 document.getElementById("btnRead").onclick = readAll;
 document.getElementById("btnSave").onclick = () => {
   if (!midiOut) return log("Not connected");
-  if (!confirm("Write the current settings to the Punck's internal flash? (survives power off)")) return;
   sendAll(); setTimeout(() => { midiOut.send([0xF0, CMD.SaveConfig, 0, 0xF7]); log("Saved to Punck flash"); }, 200);
 };
 document.getElementById("btnLoadPreset").onclick = () => { pushUndo(); loadValues(PRESETS[sel.value]); refreshKnobs(); sendAll(); log("Preset: " + sel.value); };

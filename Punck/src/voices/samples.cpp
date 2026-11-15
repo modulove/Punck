@@ -276,26 +276,26 @@ uint32_t Samples::SerialiseSampleNames(uint8_t** buff, const uint8_t voiceIndex)
 	uint8_t s = 0;
 	for (; s < sampler[voiceIndex].bankLen + 1; ++s) {
 		// overflow checking
-		if ((uint32_t)((s * 8) + 8) >= sizeof(configManager.configBuffer)) {
+		if ((uint32_t)((s * 8) + 8) >= sizeof(configManager.rxBuffer)) {
 			break;
 		}
 
 		if (s < sampler[voiceIndex].bankLen) {
 			const char* sampleName = sampler[voiceIndex].bank[s].s->name;
-			memcpy(configManager.configBuffer + (s * 8), sampleName, 8);
+			memcpy(configManager.rxBuffer + (s * 8), sampleName, 8);
 		} else {
 			// Create dummy name for random mode
-			strncpy((char*)configManager.configBuffer + (s * 8), "-Random-", 8);
+			strncpy((char*)configManager.rxBuffer + (s * 8), "-Random-", 8);
 		}
 	}
 
 	// Check that there are no characters with ASCII code > 127 for sysex transmission (replace with "_")
 	for (uint8_t i = 0; i < s * 8; ++i) {
-		if (configManager.configBuffer[i] & 0x80) {
-			configManager.configBuffer[i] = '_';
+		if (configManager.rxBuffer[i] & 0x80) {
+			configManager.rxBuffer[i] = '_';
 		}
 	}
-	*buff = configManager.configBuffer;
+	*buff = configManager.rxBuffer;
 	return s * 8;
 }
 

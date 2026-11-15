@@ -14,41 +14,105 @@ void Config::ScheduleSave()
 }
 
 
-// Write calibration settings to Flash memory (H743 see programming manual p152 for sector layout)
+void Config::RequestSave()
+{
+	scheduleSave = true;
+	saveNow = true;
+}
+
+
+void Config::CheckAutoSave()
+{
+	// Main loop: save once the settings have been left alone for a moment
+	if (!scheduleSave) {
+		return;
+	}
+	const uint32_t now = SysTickVal;
+	if (saveNow || (now - saveBooked > autoSaveDelayMs && now - lastSave > autoSaveMinGapMs)) {
+		SaveConfig();
+	}
+}
+
+
+// Write settings to Flash memory (H743 see programming manual p152 for sector layout)
+// modulove: runs in the background from the main loop. The config sector is in bank 2 and the code runs from bank 1,
+// so the audio interrupt keeps running while bank 2 is programmed or erased (read-while-write between banks).
+// Nothing reads bank 2 during normal operation (the config is copied to RAM at boot).
 bool Config::SaveConfig(bool eraseOnly)
 {
-	// Set all LEDs to full
-	voiceManager.SetAllLeds(1.0f);
-
 	scheduleSave = false;
+	saveNow = false;
+	lastSave = SysTickVal;
 	bool result = true;
 
-	suspendI2S();
+	uint32_t latest = sectorSize;
+	uint32_t freePos = eraseOnly ? sectorSize : FindRecords(latest);
+	const uint32_t cfgSize = eraseOnly ? 0 : SetConfig();
+	const uint32_t needed = (cfgSize + 31) & ~31;			// programmed in 32 byte flash words
 
-	uint32_t cfgSize = SetConfig();
+	FlashUnlock(2);											// Unlock Flash memory for writing
+	FLASH->SR2 = FLASH_ALL_ERRORS;							// Clear error flags in Status Register
 
-	__disable_irq();					// Disable Interrupts
-	FlashUnlock(2);						// Unlock Flash memory for writing
-	FLASH->SR2 = FLASH_ALL_ERRORS;		// Clear error flags in Status Register
-
-	// Check if flash needs erasing
-	for (uint32_t i = 0; i < BufferSize / 4; ++i) {
-		if (addrFlashBank2Sector7[i] != 0xFFFFFFFF) {
-			FlashEraseSector(7, 2);		// Erase sector 7, Bank 2 (See p152 of manual)
-			break;
-		}
+	if (eraseOnly || freePos + needed > sectorSize) {		// sector full (or old / unknown data): erase it
+		FlashEraseSector(7, 2);								// Erase sector 7, Bank 2 (See p152 of manual)
+		FlashWaitForLastOperation(2);
+		SCB_InvalidateDCache_by_Addr(addrFlashBank2Sector7, sectorSize);
+		++eraseCount;
+		freePos = 0;
 	}
 
 	if (!eraseOnly) {
-		result = FlashProgram(addrFlashBank2Sector7, reinterpret_cast<uint32_t*>(&configBuffer), cfgSize);
+		result = FlashProgram(addrFlashBank2Sector7 + freePos / 4, reinterpret_cast<uint32_t*>(&configBuffer), cfgSize);
+		SCB_InvalidateDCache_by_Addr(addrFlashBank2Sector7 + freePos / 4, needed);
+		++saveCount;
 	}
 
-	FlashLock(2);						// Lock Bank 2 Flash
-	voiceManager.RestoreAllLeds();
-	__enable_irq(); 					// Enable Interrupts
-	resumeI2S();
-
+	FlashLock(2);											// Lock Bank 2 Flash
 	return result;
+}
+
+
+uint32_t Config::RecordLength(const uint8_t* rec, const uint32_t maxLen)
+{
+	// Length of a complete record ("CFG", version, blocks, "END"), 0 if invalid or incomplete
+	if (maxLen < 12 || strncmp(reinterpret_cast<const char*>(rec), "CFG", 4) != 0 || rec[4] != configVersion) {
+		return 0;
+	}
+	uint32_t pos = 8;
+	while (pos + 4 <= maxLen && pos + 4 <= BufferSize) {
+		if (strncmp(reinterpret_cast<const char*>(&rec[pos]), "END", 4) == 0) {
+			return pos + 4;
+		}
+		const uint16_t id  = *reinterpret_cast<const uint16_t*>(&rec[pos]);
+		const uint16_t len = *reinterpret_cast<const uint16_t*>(&rec[pos + 2]);
+		if (id == 0xFFFF || pos + 4 + len > maxLen) {
+			return 0;
+		}
+		pos += 4 + ((len + 3) & ~3);
+	}
+	return 0;
+}
+
+
+uint32_t Config::FindRecords(uint32_t& latest)
+{
+	// Walk the appended records: the newest complete one wins; an interrupted save is ignored (the one before is used)
+	SCB_InvalidateDCache_by_Addr(addrFlashBank2Sector7, sectorSize);
+	const uint8_t* base = reinterpret_cast<const uint8_t*>(addrFlashBank2Sector7);
+	latest = sectorSize;
+	uint32_t pos = 0;
+	while (pos + 32 <= sectorSize) {
+		if (*reinterpret_cast<const uint32_t*>(base + pos) == 0xFFFFFFFF) {
+			return pos;										// erased: free from here
+		}
+		const uint32_t len = RecordLength(base + pos, sectorSize - pos);
+		if (len == 0) {
+			return sectorSize;								// unknown or incomplete data: erase on the next save
+		}
+		latest = pos;
+		pos += (len + 31) & ~31;
+	}
+	return pos;
 }
 
 
@@ -115,14 +179,16 @@ void Config::RestoreConfig()
 	}
 	reverb.StoreConfig(nullptr);
 
-	const uint8_t* flashConfig = reinterpret_cast<uint8_t*>(addrFlashBank2Sector7);
 	uint8_t* reverbCfg = nullptr;
 	const uint32_t reverbSize = reverb.SerialiseConfig(&reverbCfg);
 
-	// Older versions (incl. upstream v5/v6) use a different layout: ignore them and run on defaults until saved
-	if (strcmp((const char*)flashConfig, "CFG") != 0 || flashConfig[4] != configVersion) {
+	// Newest complete record in the sector. Older versions (incl. upstream v5/v6) are not recognised: defaults until saved
+	uint32_t latest;
+	FindRecords(latest);
+	if (latest >= sectorSize) {
 		return;
 	}
+	const uint8_t* flashConfig = reinterpret_cast<uint8_t*>(addrFlashBank2Sector7) + latest;
 
 	uint32_t pos = 8;
 	while (pos + 4 <= BufferSize) {

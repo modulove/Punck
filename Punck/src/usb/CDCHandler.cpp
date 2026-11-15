@@ -111,6 +111,7 @@ void CDCHandler::ProcessCommand()
 				"cpu         -  Audio CPU load and compressor / clipper meter\r\n"
 				"status      -  Switch position, sound engines, held buttons\r\n"
 				"pots        -  Pot positions\r\n"
+				"cfg         -  Settings storage info (settings save automatically 3 s after a change)\r\n"
 				"engine:v,e  -  Set engine e (from 1) on voice v (1 kick, 2 snare, 3 hats, 6 toms/bass)\r\n"
 				"play:v,vel,o   Trigger voice v (1-7) with velocity and note offset\r\n"
 				"tone:f,dB   -  Test sine (dB re clipper ceiling) replacing the output; tone:0 = off\r\n"
@@ -211,6 +212,13 @@ void CDCHandler::ProcessCommand()
 		}
 		printf("\r\n");
 
+	} else if (cmd.compare("cfg") == 0) {						// Settings storage info
+		uint32_t latest = 0;
+		const uint32_t freePos = configManager.FindRecords(latest);
+		printf("Settings: newest record at %lu, free from %lu of %lu bytes; saves since boot %lu, erases %lu; save pending: %s\r\n",
+				latest, freePos, configManager.sectorSize, configManager.saveCount, configManager.eraseCount,
+				configManager.scheduleSave ? "yes" : "no");
+
 	} else if (cmd.compare("pots") == 0) {						// Pot positions (0 - 100 %)
 		static constexpr const char* names[] = {"Kick attack", "Kick decay", "Kick level", "Snare filter", "Snare tuning", "Snare level",
 				"Sample A level", "Sample B level", "Tempo", "Hats decay", "Hats level", "Sample A voice", "Sample A speed",
@@ -223,7 +231,7 @@ void CDCHandler::ProcessCommand()
 		int v = 0, e = 0;
 		if (sscanf(cmd.data() + 7, "%d,%d", &v, &e) == 2 && v >= 1 && v <= VoiceManager::Voice::count && e >= 1) {
 			voiceManager.RequestEngine(v - 1, e - 1);
-			printf("Voice %d engine %d (saveconfig or Tone Lab 'Save to Punck' to keep)\r\n", v, e);
+			printf("Voice %d engine %d\r\n", v, e);
 		} else {
 			printf("Format: engine:voice,engine  (voice 1 kick, 2 snare, 3 hats; engine from 1)\r\n");
 		}
@@ -269,7 +277,8 @@ void CDCHandler::ProcessCommand()
 			const long idx = strtol(cmd.data() + 4, &end, 10);	// nano.specs has no scanf float support: parse by hand
 			if (end && *end == ',' && idx >= 0 && idx < (long)count) {
 				values[idx] = strtof(end + 1, nullptr);
-				voiceManager.StoreMixConfig(nullptr, 0);		// Recalculate coefficients (not saved until saveconfig)
+				voiceManager.StoreMixConfig(nullptr, 0);		// Recalculate coefficients
+				configManager.ScheduleSave();
 			} else {
 				printf("Format: mix:index,value\r\n");
 			}

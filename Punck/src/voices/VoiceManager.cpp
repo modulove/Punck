@@ -362,7 +362,7 @@ void VoiceManager::CheckButtons()
 	//	When switching to or from MIDI learn mode turn off all LEDs save if required and turn off LEDs
 	if (oldMode != buttonMode && (oldMode == ButtonMode::midiLearn || buttonMode == ButtonMode::midiLearn)) {
 		if (oldMode == ButtonMode::midiLearn && configManager.scheduleSave) {
-			configManager.SaveConfig();
+			configManager.RequestSave();					// saved from the main loop (this runs in the audio interrupt)
 		}
 		for (auto& nm : noteMapper) {
 			nm.pwmLed.setMinLevel(0);
@@ -416,6 +416,7 @@ void VoiceManager::CheckLongPress(NoteMapper& note)
 		if (requestedEngine[v] < dv->EngineCount()) {
 			dv->SetEngine(requestedEngine[v]);
 			blinkPreview[v] = true;
+			configManager.ScheduleSave();
 		}
 		requestedEngine[v] = 0xFF;
 	}
@@ -435,6 +436,7 @@ void VoiceManager::CheckLongPress(NoteMapper& note)
 			holdFired[v] = true;										// one switch per press: release to switch again
 			dv->SetEngine((dv->GetEngine() + 1) % dv->EngineCount());
 			blinkPreview[v] = true;
+			configManager.ScheduleSave();							// remembered after power off
 		}
 	} else if (holding[v] && now - lastHeld[v] > 30) {
 		holding[v] = false;

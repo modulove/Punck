@@ -130,9 +130,9 @@ uint32_t MidiHandler::ReadCfgSysEx(uint8_t headerLength)
 	for (uint32_t i = headerLength; i < sysExCount; ++i) {
 		uint32_t idx = (i - headerLength) / 2;
 		if (lowerNibble) {
-			configManager.configBuffer[idx] = sysEx[i];
+			configManager.rxBuffer[idx] = sysEx[i];
 		} else {
-			configManager.configBuffer[idx] += sysEx[i] << 4;
+			configManager.rxBuffer[idx] += sysEx[i] << 4;
 		}
 		lowerNibble = !lowerNibble;
 	}
@@ -163,7 +163,8 @@ void MidiHandler::ProcessSysex()
 		case SetVoiceConfig:
 			if (sysEx[1] < VoiceManager::Voice::count) {
 				const uint32_t bytes = ReadCfgSysEx(2);
-				voiceManager.noteMapper[sysEx[1]].drumVoice->StoreConfig(configManager.configBuffer, bytes);
+				voiceManager.noteMapper[sysEx[1]].drumVoice->StoreConfig(configManager.rxBuffer, bytes);
+				configManager.ScheduleSave();
 			}
 			break;
 
@@ -183,7 +184,8 @@ void MidiHandler::ProcessSysex()
 		case SetReverbConfig:
 		{
 			const uint32_t bytes = ReadCfgSysEx(1);
-			reverb.StoreConfig(configManager.configBuffer);
+			reverb.StoreConfig(configManager.rxBuffer);
+			configManager.ScheduleSave();
 			break;
 		}
 
@@ -200,7 +202,8 @@ void MidiHandler::ProcessSysex()
 		case SetMixConfig:
 		{
 			const uint32_t bytes = ReadCfgSysEx(1);
-			voiceManager.StoreMixConfig(configManager.configBuffer, bytes);
+			voiceManager.StoreMixConfig(configManager.rxBuffer, bytes);
+			configManager.ScheduleSave();
 			break;
 		}
 
@@ -219,20 +222,20 @@ void MidiHandler::ProcessSysex()
 			break;
 
 		case SaveConfig:
-			configManager.SaveConfig();
+			configManager.RequestSave();				// saved from the main loop (not inside the USB interrupt)
 			break;
 
 		case GetStatus:
 		{
 			// Get playing status from sequence
-			configManager.configBuffer[0] = GetStatus;
-			configManager.configBuffer[1] = sequencer.playing ? 1 : 0;					// playing
-			configManager.configBuffer[2] = sequencer.activeSequence; 					// active sequence
-			configManager.configBuffer[3] = sequencer.currentBar;     					// current bar
-			configManager.configBuffer[4] = sequencer.currentBeat;    					// current beat
-			configManager.configBuffer[5] = i2sUnderrun;		    					// I2S Underrun
+			configManager.rxBuffer[0] = GetStatus;
+			configManager.rxBuffer[1] = sequencer.playing ? 1 : 0;					// playing
+			configManager.rxBuffer[2] = sequencer.activeSequence; 					// active sequence
+			configManager.rxBuffer[3] = sequencer.currentBar;     					// current bar
+			configManager.rxBuffer[4] = sequencer.currentBeat;    					// current beat
+			configManager.rxBuffer[5] = i2sUnderrun;		    					// I2S Underrun
 
-			const uint32_t len = ConstructSysEx(configManager.configBuffer, 6, nullptr, 0, noSplit);
+			const uint32_t len = ConstructSysEx(configManager.rxBuffer, 6, nullptr, 0, noSplit);
 			usb->SendData(sysExOut, len, inEP);
 			break;
 		}
@@ -247,15 +250,15 @@ void MidiHandler::ProcessSysex()
 			auto seqInfo = sequencer.GetSeqInfo(seq);
 
 			// Insert header data
-			configManager.configBuffer[0] = GetSequence;
-			configManager.configBuffer[1] = seq;					// sequence
-			configManager.configBuffer[2] = seqInfo.beatsPerBar;	// beats per bar
-			configManager.configBuffer[3] = seqInfo.bars;			// bars
-			configManager.configBuffer[4] = bar;					// bar number
+			configManager.rxBuffer[0] = GetSequence;
+			configManager.rxBuffer[1] = seq;					// sequence
+			configManager.rxBuffer[2] = seqInfo.beatsPerBar;	// beats per bar
+			configManager.rxBuffer[3] = seqInfo.bars;			// bars
+			configManager.rxBuffer[4] = bar;					// bar number
 
 			uint8_t* cfgBuffer = nullptr;
 			const uint32_t bytes = sequencer.GetBar(&cfgBuffer, seq, bar);
-			const uint32_t len = ConstructSysEx(cfgBuffer, bytes, configManager.configBuffer, 5, noSplit);
+			const uint32_t len = ConstructSysEx(cfgBuffer, bytes, configManager.rxBuffer, 5, noSplit);
 			usb->SendData(sysExOut, len, inEP);
 			break;
 		}
@@ -269,6 +272,7 @@ void MidiHandler::ProcessSysex()
 			const uint32_t bar = sysEx[4];					// bar number
 
 			sequencer.StoreConfig(sysEx + 5, sysExCount - 5, seq, bar, beatsPerBar, bars);
+			configManager.ScheduleSave();
 			break;
 		}
 

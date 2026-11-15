@@ -52,6 +52,7 @@ int main(void) {
 		usb.cdc.ProcessCommand();	// Check for incoming USB serial commands
 		fatTools.CheckCache();		// Check if any outstanding cache changes need to be written to Flash
 		voiceManager.IdleTasks();	// Check if filter coefficients need to be updated
+		configManager.CheckAutoSave();	// Settings save themselves a few seconds after the last change
 
 #if (USB_DEBUG)
 		if (uart.commandReady) {

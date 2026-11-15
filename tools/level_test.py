@@ -148,12 +148,12 @@ RATE_FILE = os.path.join(OUT, "punck_rate_factor.txt")
 
 
 def punck_rate_factor():
-    # The Punck's I2S clock runs from the internal RC oscillator (nominal 47619 Hz, measured ~47810 Hz), so a
+    # Old firmware: the I2S clock ran from the internal RC oscillator (nominal 47619 Hz, measured ~47810 Hz), so a
     # 1000 Hz test tone arrives at ~996 Hz. 'detect' measures the factor; default = last measurement.
     try:
         return float(open(RATE_FILE).read())
     except (OSError, ValueError):
-        return 0.99605
+        return 1.0                      # exact 48 kHz since the PLL3 clock fix (0.99605 with the old HSI clock)
 
 
 def find_freq(x, f0, rate):

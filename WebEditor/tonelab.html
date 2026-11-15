@@ -118,11 +118,14 @@ const STRUCTS = {
             ["sweep",1],["curve",1],["sustain",1],["color",1],["clickDecay",1],["fxMode",1],["tapLength",1],["tapDirect",1],["rumbleNoise",1],
             ["rumbleGrit",1],["subLevel",1],["rumbleWidth",1],["rumbleHp",1]] },
   Snare:  { voice: 1, fields: [["noiseInitLevel",1],["noiseDecay",1],["baseFreq",1],["basePos",1],["partialDecay",1],["partialInitLevel",3],["partialFreqOffset",3],
-            ["engine",1],["pitch",1],["tone",1],["decayP",1],["rimDecay",1],["rimRatio",1]] },
+            ["engine",1],["pitch",1],["tone",1],["decayP",1],["rimDecay",1],["rimRatio",1],
+            ["modalStructure",1],["modalWires",1],["modalWireTone",1],["modalWireDecay",1],["modalModes",1],["modalLevel",1]] },
   HiHat:  { voice: 2, fields: [["attackInc",1],["decay",1],["hpInitCutoff",1],["hpFinalCutoff",1],["hpCutoffInc",1],["lpInitCutoff",1],["lpFinalCutoff",1],["lpCutoffInc",1],["noiseInitLevel",1],["noiseDecay",1],["partialScale",6],["partialFreq",6],
             ["decayMin",1],["decayRange",1],["decayMax",1],["ringModLevel",1],["ringModOpenStart",1],["gritHold",1],["randomThreshold",1],["randomSkew",1],
             ["partialFM",8,"b"],["engine",1],["pitch",1],["tone",1],["noisiness",1]] },
-  Toms:   { voice: 5, fields: [["decaySpeed",2],["rampInc",1],["baseFreq",1],["sineFreqScale",2],["sineInitLevel",2],["sineSlowDownRate",1]] },
+  Toms:   { voice: 5, fields: [["decaySpeed",2],["rampInc",1],["baseFreq",1],["sineFreqScale",2],["sineInitLevel",2],["sineSlowDownRate",1],
+            ["engine",1],["bassPitch",1],["bassWave",1],["bassSub",1],["bassCutoff",1],["bassEnv",1],["bassEnvDecay",1],["bassDecay",1],
+            ["bassReso",1],["bassDrive",1],["bassFollow",1],["bassFollowVel",1],["bassAccent",1],["bassLevel",1]] },
   Claps:  { voice: 6, fields: [["initLevel",1],["reverbInitLevel",1],["initDecay",1],["reverbDecay",1],["filterCutoff",1],["filterQ",1],["unfilteredNoiseLevel",1]] },
   Reverb: { voice: -1, fields: [["reverbLevel",1],["mixerBaseDelay",1],["diffuserCount",1],["mixerChannels",1],["filterCutoff",1]] },
   Mix:    { voice: -2, fields: [["duckDrums",1],["duckSamplers",1],["duckReverb",1],["duckHoldMs",1],["duckReleaseMs",1],["kickReverbSend",1],
@@ -170,7 +173,10 @@ const NEWDEF = {
           rumbleDrive: 0.6, rumbleDuck: 0.9, rumbleLevel: 1.4, click: 0.5, tap2: 0.6, tap3: 0.4, tap4: 0.25,
           sweep: 24, curve: 0.5, sustain: 0.35, color: 0.15, clickDecay: 6, fxMode: 0, tapLength: 0.4, tapDirect: 0, rumbleNoise: 0.2,
           rumbleGrit: 0.4, subLevel: 0.3, rumbleWidth: 0.4, rumbleHp: 30 },
-  Snare: { engine: 1, pitch: 200, tone: 0.5, decayP: 0.35, rimDecay: 45, rimRatio: 2.17 },
+  Snare: { engine: 1, pitch: 200, tone: 0.5, decayP: 0.35, rimDecay: 45, rimRatio: 2.17,
+           modalStructure: 0.15, modalWires: 0.5, modalWireTone: 4500, modalWireDecay: 140, modalModes: 16, modalLevel: 1 },
+  Toms: { engine: 0, bassPitch: 41.2, bassWave: 0.25, bassSub: 0.35, bassCutoff: 160, bassEnv: 3, bassEnvDecay: 55, bassDecay: 130,
+          bassReso: 0.3, bassDrive: 0.35, bassFollow: 0, bassFollowVel: 0.85, bassAccent: 0.5, bassLevel: 0.9 },
   HiHat: { decayMin: 0.998, decayRange: 0.0028, decayMax: 0.99985, ringModLevel: 0.6, ringModOpenStart: 0.35, gritHold: 3, randomThreshold: 0.96, randomSkew: 2,
            partialFM: [0, 8, 1, 6, 1, 0, 0, 0], engine: 1, pitch: 400, tone: 0.6, noisiness: 0.35 },
   Mix: { duckDrums: 0, duckSamplers: 0, duckReverb: 0, duckHoldMs: 25, duckReleaseMs: 160, kickReverbSend: 0,
@@ -194,7 +200,18 @@ PRESETS["Hypnotic rumble"] = JSON.parse(JSON.stringify(PRESETS["Deep techno"]));
 Object.assign(PRESETS["Hypnotic rumble"].Kick, { engine: 4, pitch: 47, tone: 0.5, drive: 0.3, fxMode: 0, sweep: 26, curve: 0.65, sustain: 0.3, color: 0.2,
   click: 0.6, clickDecay: 6, rumbleFeedback: 0.88, rumbleCutoff: 150, rumbleDrive: 0.65, rumbleGrit: 0.5, rumbleDuck: 0.9, rumbleLevel: 1.5,
   rumbleNoise: 0.3, subLevel: 0.25, rumbleWidth: 0.4, rumbleHp: 32, tap2: 0.7, tap3: 0.45, tap4: 0.3, tapLength: 0.35, tapDirect: 0.1 });
-const ENGINES = { Kick: ["Classic", "Deep (808)", "Punch (909)", "FM", "Rumble / groove"], Snare: ["Classic", "Analog (808)", "Synthetic (909)", "Rim / clave"],
+PRESETS["Psytrance (KBBB)"] = JSON.parse(JSON.stringify(PRESETS["Deep techno"]));
+Object.assign(PRESETS["Psytrance (KBBB)"].Kick, { engine: 2, pitch: 46.25, tone: 0.55 });
+Object.assign(PRESETS["Psytrance (KBBB)"].HiHat, { engine: 2, pitch: 450, tone: 0.7, noisiness: 0.4 });
+PRESETS["Psytrance (KBBB)"].Toms = { engine: 1, bassPitch: 46.25, bassWave: 0.2, bassSub: 0.3, bassCutoff: 180, bassEnv: 3.5, bassEnvDecay: 45, bassDecay: 110,
+  bassReso: 0.3, bassDrive: 0.4, bassFollow: 2, bassFollowVel: 0.85, bassAccent: 0.5, bassLevel: 0.9 };
+PRESETS["Offbeat techno bass"] = JSON.parse(JSON.stringify(PRESETS["Deep techno"]));
+PRESETS["Offbeat techno bass"].Toms = { engine: 1, bassPitch: 43.65, bassWave: 0.6, bassSub: 0.4, bassCutoff: 140, bassEnv: 2.5, bassEnvDecay: 70, bassDecay: 180,
+  bassReso: 0.25, bassDrive: 0.3, bassFollow: 1, bassFollowVel: 0.8, bassAccent: 0.5, bassLevel: 0.9 };
+PRESETS["Modal snare"] = JSON.parse(JSON.stringify(PRESETS["Deep techno"]));
+Object.assign(PRESETS["Modal snare"].Snare, { engine: 4, pitch: 190, decayP: 0.35, modalStructure: 0.15, modalWires: 0.55, modalWireTone: 4500, modalWireDecay: 140, modalModes: 16, modalLevel: 1 });
+const ENGINES = { Kick: ["Classic", "Deep (808)", "Punch (909)", "FM", "Rumble / groove"], Snare: ["Classic", "Analog (808)", "Synthetic (909)", "Rim / clave", "Modal (Mutable)"],
+                  Toms: ["Toms", "Bass"],
                   HiHat: ["Classic metallic", "808 square noise", "909 ring mod"] };
 // Master bus starting points (Master section menu)
 const MASTER_PRESETS = {
@@ -237,6 +254,7 @@ function fmt(v, unit) {
     case "onoff": return v >= 0.5 ? "on" : "off";
     case "clip": return ["tanh", "clean", "hard", "warm"][Math.round(v)];
     case "fx": return ["soft", "hard", "fold"][Math.round(v)];
+    case "follow": return ["off", "K-B-", "KBBB", "KBB-", "K-BB", "KB-B"][Math.round(v)];
     case "curve": return v < 0.2 ? "808 " + v.toFixed(2) : v > 0.8 ? "909 " + v.toFixed(2) : v.toFixed(2);
     default: return v.toFixed(Math.abs(v) < 1 ? 3 : 2);
   }
@@ -285,7 +303,8 @@ const UI = {
   ]},
   Snare: { title: "Snare", hints: ["Panel: Filter = low-pass, Tuning = ×0.5…1.5. Higher MIDI notes = longer.",
       "Panel: Filter = snappy (noise), Tuning = pitch ×0.5…2. Higher notes / open trigger = longer.",
-      "Panel: Filter = snappy, Tuning = pitch ×0.5…2. Tone = FM amount.", "Panel: Filter = snap noise, Tuning = pitch ×0.5…2."], controls: [
+      "Panel: Filter = snappy, Tuning = pitch ×0.5…2. Tone = FM amount.", "Panel: Filter = snap noise, Tuning = pitch ×0.5…2.",
+      "Modal resonator (Mutable Rings / Plaits) struck by a mallet + snare wires. Panel: Filter = mallet brightness, Tuning = pitch ×0.5…2. Structure: drum → tube → bell."], controls: [
     ["Tone", "baseFreq", 0, "lin", "Hz", 80, 900, "log", [0]],
     ["Body decay", "partialDecay", 0, "decay", "ms", 10, 500, "log", [0]],
     ["Noise", "noiseInitLevel", 0, "lin", "", 0, 2, "lin", [0]],
@@ -296,9 +315,15 @@ const UI = {
     ["Body 3", "partialInitLevel", 2, "lin", "", -1, 1, "lin", [0]],
     ["Ratio 2", "partialFreqOffset", 1, "lin", "x", 1, 5, "log", [0]],
     ["Ratio 3", "partialFreqOffset", 2, "lin", "x", 1, 6, "log", [0]],
-    ["Pitch", "pitch", 0, "lin", "Hzn", 80, 700, "log", [1, 2, 3]],
+    ["Pitch", "pitch", 0, "lin", "Hzn", 80, 700, "log", [1, 2, 3, 4]],
     ["Tone", "tone", 0, "lin", "", 0, 1, "lin", [1, 2]],
-    ["Decay", "decayP", 0, "lin", "", 0, 1, "lin", [1, 2, 3]],
+    ["Decay", "decayP", 0, "lin", "", 0, 1, "lin", [1, 2, 3, 4]],
+    ["Structure", "modalStructure", 0, "lin", "", 0, 1, "lin", [4]],
+    ["Wires", "modalWires", 0, "lin", "", 0, 1.5, "lin", [4]],
+    ["Wire tone", "modalWireTone", 0, "lin", "Hz", 1000, 10000, "log", [4]],
+    ["Wire decay", "modalWireDecay", 0, "lin", "ms", 20, 600, "log", [4]],
+    ["Modes", "modalModes", 0, "lin", "int", 4, 24, "lin", [4]],
+    ["Level", "modalLevel", 0, "lin", "", 0, 2, "lin", [4]],
     ["Rim decay", "rimDecay", 0, "lin", "ms", 5, 200, "log", [3]],
     ["Rim ratio", "rimRatio", 0, "lin", "x", 1.2, 4, "log", [3]],
   ]},
@@ -325,14 +350,28 @@ const UI = {
     [`P${i + 1} freq`, "partialFreq", i, "lin", "Hz", 100, 12000, "log", [0]],
     [`P${i + 1} level`, "partialScale", i, "lin", "", 0, 1.5, "lin", [0]],
   ])},
-  Toms: { title: "Toms", hint: "MIDI/sequencer only. Stock fw plays both partials at Pitch × Ratio 2.", controls: [
-    ["Pitch", "baseFreq", 0, "lin", "Hz", 30, 300, "log"],
-    ["Ratio 2", "sineFreqScale", 1, "lin", "x", 0.5, 3, "log"],
-    ["Decay", "decaySpeed", 0, "decay", "ms", 20, 2000, "log"],
-    ["Decay 2", "decaySpeed", 1, "decay", "ms", 20, 2000, "log"],
-    ["Pitch drop", "sineSlowDownRate", 0, "drop", "oct/s", 0, 8, "lin"],
-    ["Attack", "rampInc", 0, "lin", "", 0.05, 0.9, "lin"],
-    ["Level 2", "sineInitLevel", 1, "lin", "", 0, 1, "lin"],
+  Toms: { title: "Toms / Bass", hints: ["MIDI/sequencer only (drum notes 40/41, chromatic ch 14). Stock fw plays both partials at Pitch × Ratio 2.",
+      "Bass: drum notes 40/41 (41 = octave up), chromatic MIDI ch 14 (note 60 = Pitch; sets the note for the auto bass), or Follow: auto notes on the 16ths after every kick (tempo from MIDI clock or kick interval)."], controls: [
+    ["Pitch", "baseFreq", 0, "lin", "Hz", 30, 300, "log", [0]],
+    ["Ratio 2", "sineFreqScale", 1, "lin", "x", 0.5, 3, "log", [0]],
+    ["Decay", "decaySpeed", 0, "decay", "ms", 20, 2000, "log", [0]],
+    ["Decay 2", "decaySpeed", 1, "decay", "ms", 20, 2000, "log", [0]],
+    ["Pitch drop", "sineSlowDownRate", 0, "drop", "oct/s", 0, 8, "lin", [0]],
+    ["Attack", "rampInc", 0, "lin", "", 0.05, 0.9, "lin", [0]],
+    ["Level 2", "sineInitLevel", 1, "lin", "", 0, 1, "lin", [0]],
+    ["Follow", "bassFollow", 0, "lin", "follow", 0, 5, "lin", [1]],
+    ["Pitch", "bassPitch", 0, "lin", "Hzn", 27.5, 110, "log", [1]],
+    ["Wave", "bassWave", 0, "lin", "", 0, 1, "lin", [1]],
+    ["Sub", "bassSub", 0, "lin", "", 0, 1, "lin", [1]],
+    ["Cutoff", "bassCutoff", 0, "lin", "Hz", 40, 2000, "log", [1]],
+    ["Env", "bassEnv", 0, "lin", "", 0, 6, "lin", [1]],
+    ["Env decay", "bassEnvDecay", 0, "lin", "ms", 5, 400, "log", [1]],
+    ["Decay", "bassDecay", 0, "lin", "ms", 30, 1000, "log", [1]],
+    ["Reso", "bassReso", 0, "lin", "", 0, 1, "lin", [1]],
+    ["Drive", "bassDrive", 0, "lin", "", 0, 1, "lin", [1]],
+    ["Accent", "bassAccent", 0, "lin", "", 0, 1, "lin", [1]],
+    ["Follow vel", "bassFollowVel", 0, "lin", "", 0.1, 1, "lin", [1]],
+    ["Level", "bassLevel", 0, "lin", "", 0, 2, "lin", [1]],
   ]},
   Claps: { title: "Clap", hint: "MIDI/sequencer only. Band-passed noise: 3 hits + tail.", controls: [
     ["Filter", "filterCutoff", 0, "lin", "Hz", 300, 6000, "log"],
@@ -532,7 +571,7 @@ function makeKnob(parent, voice, def) {
   k.value = () => k.conv.fromRaw(getRaw(voice, field, idx));
   k.set = (v, send = true) => {
     v = Math.min(max, Math.max(min, v));
-    if (["int", "onoff", "clip", "fx"].includes(unit) || conv === "chans") v = Math.round(v);
+    if (["int", "onoff", "clip", "fx", "follow"].includes(unit) || conv === "chans") v = Math.round(v);
     setRaw(voice, field, idx, k.conv.toRaw(v));
     if (send) queueSend(voice);
     refreshKnobs(voice);
@@ -702,7 +741,7 @@ const MAPS = {
   modulove: { ch: 9, kick: 36, snare: 37, snareL: 38, hatC: 42, hatO: 44, tomL: 40, tomH: 41, clap: 39, smpA: 45, smpB: 48 },
 };
 const PADS = [["kick", "Kick", "Z"], ["snare", "Snare", "X"], ["snareL", "Snare long", "C"], ["hatC", "Hat closed", "V"], ["hatO", "Hat open", "B"],
-              ["tomL", "Tom low", "N"], ["tomH", "Tom high", "M"], ["clap", "Clap", ","], ["smpA", "Sample A", "."], ["smpB", "Sample B", "/"]];
+              ["tomL", "Tom / bass", "N"], ["tomH", "Tom hi / bass +8va", "M"], ["clap", "Clap", ","], ["smpA", "Sample A", "."], ["smpB", "Sample B", "/"]];
 const padRow = document.getElementById("padRow");
 function map() { return MAPS[document.getElementById("selMap").value]; }
 function note(key, vel = 110, when = performance.now()) {

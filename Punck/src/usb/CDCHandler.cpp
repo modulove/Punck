@@ -111,7 +111,7 @@ void CDCHandler::ProcessCommand()
 				"cpu         -  Audio CPU load and compressor / clipper meter\r\n"
 				"status      -  Switch position, sound engines, held buttons\r\n"
 				"pots        -  Pot positions\r\n"
-				"engine:v,e  -  Set engine e (from 1) on voice v (1 kick, 2 snare, 3 hats)\r\n"
+				"engine:v,e  -  Set engine e (from 1) on voice v (1 kick, 2 snare, 3 hats, 6 toms/bass)\r\n"
 				"play:v,vel,o   Trigger voice v (1-7) with velocity and note offset\r\n"
 				"tone:f,dB   -  Test sine (dB re clipper ceiling) replacing the output; tone:0 = off\r\n"
 				"reboot      -  Reboot device\r\n"
@@ -184,7 +184,7 @@ void CDCHandler::ProcessCommand()
 		printf("CPU avg: %.1f%%  max: %.1f%%  underruns: %lu\r\n", m.cpuAvg, m.cpuMax, i2sUnderrun);
 		printf("Comp reduction max: %.1f dB  into clipper: %+.1f dB  output peak: %+.1f dBFS\r\n", m.reductionDb, m.clipDb, m.peakDb);
 		static constexpr const char* blocks[] = {"kick", "snare", "hats", "samples", "-", "toms", "claps", "reverb", "master"};
-		printf("Cycles avg/max per sample (budget ~8370):");
+		printf("Cycles avg/max per sample (budget 8333):");
 		for (uint32_t i = 0; i < VoiceManager::profCount; ++i) {
 			if (i != VoiceManager::Voice::samplerB) {
 				printf(" %s %.0f/%.0f", blocks[i], voiceManager.profAvg[i], voiceManager.profMax[i]);
@@ -195,11 +195,14 @@ void CDCHandler::ProcessCommand()
 
 	} else if (cmd.compare("status") == 0) {					// Switch position and sound engines
 		static constexpr const char* kickNames[] = {"classic", "deep", "punch", "fm", "rumble"};
-		static constexpr const char* snareNames[] = {"classic", "808", "909", "rim"};
+		static constexpr const char* snareNames[] = {"classic", "808", "909", "rim", "modal"};
+		static constexpr const char* tomNames[] = {"toms", "bass"};
 		static constexpr const char* hatNames[] = {"classic", "808", "909"};
 		printf("Switch: %s\r\n", voiceManager.ButtonModeName());
 		const uint8_t k = voiceManager.kickPlayer.GetEngine(), s = voiceManager.snarePlayer.GetEngine(), h = voiceManager.hihatPlayer.GetEngine();
-		printf("Kick  engine %d (%s)\r\nSnare engine %d (%s)\r\nHats  engine %d (%s)\r\n", k + 1, kickNames[k % 5], s + 1, snareNames[s % 4], h + 1, hatNames[h % 3]);
+		const uint8_t t = voiceManager.tomsPlayer.GetEngine();
+		printf("Kick  engine %d (%s)\r\nSnare engine %d (%s)\r\nHats  engine %d (%s)\r\nToms  engine %d (%s)  (voice 6, MIDI only)\r\n",
+				k + 1, kickNames[k % 5], s + 1, snareNames[s % 5], h + 1, hatNames[h % 3], t + 1, tomNames[t % 2]);
 		printf("Buttons held:");
 		for (auto& nm : voiceManager.noteMapper) {
 			if (nm.trigger.ButtonHeld()) {

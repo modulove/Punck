@@ -4,6 +4,7 @@
 #include "Kick.h"
 #include "Snare.h"
 #include "HiHat.h"
+#include "Toms.h"
 
 struct NoteMapper {
 	struct PWMLED { void Level(float) {} } pwmLed;
@@ -14,11 +15,13 @@ public:
 	float duckLevel = 0.0f;
 	float sixteenth = 0.0f;							// samples per 16th (0 = unknown tempo)
 	float duckHoldMs = 25.0f, duckReleaseMs = 160.0f;
+	Toms* bassVoice = nullptr;						// gets the auto bass notes after each kick
 
 	float SixteenthSamples() { return sixteenth; }
 	void KickTriggered(const float velocity) {		// same envelope as the firmware
 		duckTarget = std::max(duckTarget, std::clamp(velocity, 0.0f, 1.0f));
 		duckHold = static_cast<uint32_t>(duckHoldMs * 0.001f * systemSampleRate);
+		if (bassVoice) bassVoice->KickPlayed(sixteenth, velocity);
 	}
 	void UpdateDuck() {
 		if (duckHold > 0) {

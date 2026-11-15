@@ -239,6 +239,7 @@ void VoiceManager::KickTriggered(const float velocity)
 	}
 	duckTarget = std::max(duckTarget, std::clamp(velocity, 0.0f, 1.0f));
 	duckHold = static_cast<uint32_t>(mixConfig.duckHoldMs * 0.001f * systemSampleRate);
+	tomsPlayer.KickPlayed(SixteenthSamples(), velocity);			// Bass engine: auto notes after each kick
 }
 
 

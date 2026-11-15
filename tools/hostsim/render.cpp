@@ -121,12 +121,20 @@ struct MasterBus {
 
 // ------------------------------------------------------------------------------------------------
 struct Rig {
-	Kick kick; Snare snare; HiHat hat;
-	NoteMapper nmK, nmS, nmH;
+	Kick kick; Snare snare; HiHat hat; Toms toms;
+	NoteMapper nmK, nmS, nmH, nmT;
 	Rig()
 	{
-		kick.noteMapper = &nmK; snare.noteMapper = &nmS; hat.noteMapper = &nmH;
-		kick.StoreConfig(nullptr, 0); snare.StoreConfig(nullptr, 0); hat.StoreConfig(nullptr, 0);
+		kick.noteMapper = &nmK; snare.noteMapper = &nmS; hat.noteMapper = &nmH; toms.noteMapper = &nmT;
+		kick.StoreConfig(nullptr, 0); snare.StoreConfig(nullptr, 0); hat.StoreConfig(nullptr, 0); toms.StoreConfig(nullptr, 0);
+		voiceManager.bassVoice = &toms;
+	}
+	template<class V> static void Set(V& v, const uint32_t index, const float value)
+	{
+		uint8_t* buf; const uint32_t len = v.SerialiseConfig(&buf, 0);
+		std::vector<uint8_t> copy(buf, buf + len);
+		memcpy(copy.data() + 4 * index, &value, 4);
+		v.StoreConfig(copy.data(), len);
 	}
 	void SetKick(const uint32_t index, const float value)		// set a kick config float by index (order of Kick::Config)
 	{
@@ -140,10 +148,77 @@ struct Rig {
 static void Tick(Rig& r, float kickOut[2], float drums[2])
 {
 	voiceManager.UpdateDuck();
-	r.kick.CalcOutput(); r.snare.CalcOutput(); r.hat.CalcOutput();
+	r.kick.CalcOutput(); r.snare.CalcOutput(); r.hat.CalcOutput(); r.toms.CalcOutput();
 	kickOut[0] = r.kick.outputLevel[0]; kickOut[1] = r.kick.outputLevel[1];
-	drums[0] = r.snare.outputLevel[0] + r.hat.outputLevel[0];
-	drums[1] = r.snare.outputLevel[1] + r.hat.outputLevel[1];
+	drums[0] = r.snare.outputLevel[0] + r.hat.outputLevel[0] + r.toms.outputLevel[0];
+	drums[1] = r.snare.outputLevel[1] + r.hat.outputLevel[1] + r.toms.outputLevel[1];
+}
+
+
+// Snare engines side by side (4 hits each), the modal engine with several structure / brightness settings
+static void RenderSnares(const std::string& dir)
+{
+	struct Case { const char* name; uint32_t engine; float structure, filterPot; };
+	const Case cases[] = {{"analog 808", 1, 0, 0.5f}, {"synthetic 909", 2, 0, 0.5f}, {"modal drum (struct 0.15)", 4, 0.15f, 0.5f},
+		{"modal drum dark (filter 0.2)", 4, 0.15f, 0.2f}, {"modal harmonic (struct 0.3)", 4, 0.3f, 0.6f}, {"modal metal (struct 0.75)", 4, 0.75f, 0.7f}};
+	const float beat = 60.0f / 124.0f * systemSampleRate;
+	Wav wav;
+	printf("\nSnare engines (Level pot at noon):\n");
+	for (const auto& c : cases) {
+		Rig r;
+		r.snare.SetEngine(c.engine);
+		Rig::Set(r.snare, 17, c.structure);
+		Pots(0.5f, 0.5f, 0.3f);
+		ADC_array[ADC_SnareFilter] = static_cast<uint16_t>(c.filterPot * 65535.0f);
+		Stats st;
+		auto t0 = std::chrono::steady_clock::now();
+		for (uint32_t s = 0; s < 4 * static_cast<uint32_t>(beat); ++s) {
+			if (s % static_cast<uint32_t>(beat) == 0) r.snare.Play(0, 0, 2, 1.0f, 1.0f);
+			r.snare.CalcOutput();
+			wav.Add(r.snare.outputLevel[0], r.snare.outputLevel[1]); st.Add(r.snare.outputLevel[0]);
+		}
+		const double us = std::chrono::duration<double, std::micro>(std::chrono::steady_clock::now() - t0).count() / (4 * beat);
+		printf("  %-30s peak %+5.1f dBFS  rms %+5.1f dBFS  nan %llu  host %.3f us/sample\n", c.name, st.PeakDb(), st.RmsDb(),
+				(unsigned long long)st.nan, us);
+		for (uint32_t s = 0; s < systemSampleRate / 2; ++s) wav.Add(0.0f, 0.0f);
+	}
+	wav.Write(dir + "/snare_engines.wav");
+}
+
+
+// Bass engine: psytrance rolling bass (KBBB after each kick) and an offbeat techno bass, through the master bus
+static void RenderBass(const std::string& dir, const char* name, const float bpm, const float follow, const uint32_t kickEngine,
+		const float kickDecay, const float bassPitch, const float bassDecay)
+{
+	Rig r;
+	r.kick.SetEngine(kickEngine);
+	r.toms.SetEngine(1);
+	Rig::Set(r.toms, 19, follow);
+	Rig::Set(r.toms, 10, bassPitch);
+	Rig::Set(r.toms, 16, bassDecay);
+	r.hat.SetEngine(1);
+	Pots(0.3f, kickDecay, 0.25f);
+	const float sixteenth = 60.0f / bpm * systemSampleRate / 4.0f;
+	voiceManager.sixteenth = sixteenth;
+	MasterBus bus; bus.Configure();
+	Wav wav; Stats st, bassSt;
+	auto t0 = std::chrono::steady_clock::now();
+	double bassUs = 0.0;
+	for (uint32_t step = 0; step < 16 * 8; ++step) {
+		if (step % 4 == 0) r.kick.Play(0, 0, 0, 1.0f, 1.0f);
+		if (step % 4 == 2) r.hat.Play(0, 2, 3, 0.6f, 1.0f);
+		for (uint32_t s = 0; s < static_cast<uint32_t>(sixteenth); ++s) {
+			float k[2], d[2], o[2];
+			Tick(r, k, d);
+			bus.Process(k, d, o);
+			wav.Add(o[0], o[1]); st.Add(o[0]); bassSt.Add(r.toms.outputLevel[0]);
+		}
+	}
+	(void)t0; (void)bassUs;
+	wav.Write(dir + "/" + name + ".wav");
+	printf("  %-22s mix peak %+5.1f rms %+5.1f dBFS | bass alone peak %+5.1f rms %+5.1f dBFS  GR max %.1f  over-clip %.2f %%  nan %llu\n",
+			name, st.PeakDb(), st.RmsDb(), bassSt.PeakDb(), bassSt.RmsDb(), bus.grMax, 100.0 * bus.clipped / std::max<uint64_t>(2 * bus.n, 1),
+			(unsigned long long)(st.nan + bassSt.nan));
 }
 
 // Kick engines one after the other (4 hits each at 124 BPM), then the rumble groove
@@ -244,6 +319,11 @@ int main(int argc, char** argv)
 {
 	const std::string dir = argc > 1 ? argv[1] : ".";
 	RenderKickEngines(dir);
+	RenderSnares(dir);
+
+	printf("\nBass engine (toms slot) through the master bus:\n");
+	RenderBass(dir, "bass_psy_kbbb_142", 142.0f, 2.0f, 2, 0.15f, 46.25f, 110.0f);		// punch kick, F#1, rolling
+	RenderBass(dir, "bass_offbeat_124", 124.0f, 1.0f, 1, 0.45f, 43.65f, 180.0f);		// deep kick, F1, offbeat
 
 	printf("\nRumble engine, rms per 16th (kick on the 1st):\n");
 	RumbleProfile("Attack 0.8 defaults", 0.8f);

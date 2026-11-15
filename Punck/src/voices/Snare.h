@@ -4,13 +4,14 @@
 #include "Filter.h"
 #include "plaits/dsp/drums/analog_snare_drum.h"
 #include "plaits/dsp/drums/synthetic_snare_drum.h"
+#include "plaits/dsp/physical_modelling/modal_drum.h"
 
 class NoteMapper;
 
 
 class Snare : public DrumVoice {
 public:
-	enum Engine : uint8_t {classic = 0, analog, synthetic, rim, engineCount};
+	enum Engine : uint8_t {classic = 0, analog, synthetic, rim, modal, engineCount};
 
 	void Play(const uint8_t voice, const uint32_t noteOffset, uint32_t noteRange, const float velocity, const float pitch);
 	void Play(const uint8_t voice, const uint32_t index);
@@ -55,6 +56,13 @@ private:
 	float rimPhase[2] = {}, rimInc[2] = {}, rimEnv[2] = {}, rimCoef[2] = {};
 	float clickEnv = 0.0f, clickCoef = 0.0f;
 
+	// Modal engine: Mutable Instruments modal resonator (Rings / Plaits) struck by a mallet + snare wire noise
+	plaits::ModalDrum modalDrum;
+	stmlib::Svf wireBp;
+	float wireEnv = 0.0f, wireCoef = 0.99f;
+	bool modalReady = false;
+	static constexpr float modalGain = 0.45f;		// resonator output scaling: matches the 808 snare level (tools/hostsim)
+
 	struct Config {
 		// Classic engine (upstream layout - keep order for the web editor)
 		float noiseInitLevel = 1.0f;
@@ -72,6 +80,14 @@ private:
 		float decay = 0.35f;					// Plaits decay 0 - 1 (MIDI note offset / open trigger adds up to +0.4)
 		float rimDecay = 45.0f;					// Rim: decay time (ms)
 		float rimRatio = 2.17f;					// Rim: second partial ratio
+
+		// Modal engine (Filter pot = mallet brightness, Tuning = pitch, Decay = damping)
+		float modalStructure = 0.15f;			// 0-0.25 drum (compressed partials), 0.3 harmonic, up to 1 bell / plate
+		float modalWires = 0.5f;				// Snare wire noise level
+		float modalWireTone = 4500.0f;			// Snare wire band (Hz)
+		float modalWireDecay = 140.0f;			// Snare wire decay (ms)
+		float modalModes = 16.0f;				// Resonator modes 4 - 24 (more = brighter, more CPU)
+		float modalLevel = 1.0f;				// Output trim
 	} config;
 
 	Filter<2> filter{filterPass::LowPass, &(ADC_array[ADC_SnareFilter])};		// Classic: filters partial and noise elements

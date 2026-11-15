@@ -436,8 +436,27 @@ void InitI2S()
 	PER_CLK = 64MHz				64000000  / (32*2  * ((2 * 10) + 1)) = 47619.05
 
 	Note timing problems experienced using both pll1_q_ck and pll2_p_ck when FMC controller is using PLL2
+
+	modulove: PLL3 from the 12 MHz crystal gives exactly 48 kHz (upstream per_ck = HSI RC oscillator: nominal 47619 Hz,
+	measured ~47810 Hz on the module, temperature dependent - all pitches ~7 cents flat). PLL3 is otherwise unused.
+	PLL3 = 12MHz / 5 (M) = 2.4MHz * 128 (N) = 307.2MHz / 4 (P) = 76.8MHz:	76800000 / (32*2 * ((2 * 12) + 1)) = 48000.00
+	Define I2S_PER_CLK instead of I2S_PLL3_CLK to go back to the upstream clock.
 	*/
-#define I2S_PER_CLK
+#define I2S_PLL3_CLK
+#ifdef I2S_PLL3_CLK
+	RCC->PLLCKSELR = (RCC->PLLCKSELR & ~RCC_PLLCKSELR_DIVM3) | (5 << RCC_PLLCKSELR_DIVM3_Pos);
+	RCC->PLL3DIVR = (128 - 1) << RCC_PLL3DIVR_N3_Pos | (4 - 1) << RCC_PLL3DIVR_P3_Pos |
+					(2 - 1) << RCC_PLL3DIVR_Q3_Pos | (2 - 1) << RCC_PLL3DIVR_R3_Pos;
+	RCC->PLLCFGR = (RCC->PLLCFGR & ~(RCC_PLLCFGR_PLL3RGE | RCC_PLLCFGR_PLL3VCOSEL | RCC_PLLCFGR_PLL3FRACEN)) |
+					RCC_PLLCFGR_PLL3RGE_1 |			// 01: reference 2 - 4 MHz; VCOSEL 0: wide VCO range 192 - 836 MHz
+					RCC_PLLCFGR_DIVP3EN;
+	RCC->CR |= RCC_CR_PLL3ON;
+	while ((RCC->CR & RCC_CR_PLL3RDY) == 0);
+	RCC->D2CCIP1R = (RCC->D2CCIP1R & ~RCC_D2CCIP1R_SPI123SEL) | RCC_D2CCIP1R_SPI123SEL_1;	// 010: pll3_p_ck
+	SPI2->I2SCFGR |= (12 << SPI_I2SCFGR_I2SDIV_Pos);// Set I2SDIV to 12 with Odd factor prescaler
+	SPI2->I2SCFGR |= SPI_I2SCFGR_ODD;
+#endif
+
 #ifdef I2S_PLL2P_CLK
 	// Use PLL2 clock - configured to 200MHz
 	RCC->D2CCIP1R |= RCC_D2CCIP1R_SPI123SEL_0;

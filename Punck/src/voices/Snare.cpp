@@ -49,6 +49,15 @@ void Snare::Play(const uint8_t voice, const uint32_t noteOffset, uint32_t noteRa
 		clickEnv = accent * (0.3f + 0.7f * snappy);
 		clickCoef = dyn::DecayCoef(2.0f + 25.0f * snappy);
 	}
+
+	if (engine == modal && modalReady) {
+		// Filter pot = mallet brightness; coefficients for all modes are computed here, once per hit
+		modalDrum.set_num_modes(static_cast<int>(config.modalModes));
+		modalDrum.Strike(f0, std::clamp(config.modalStructure, 0.0f, 1.0f), snappy, decayEff, accent);
+		wireEnv = accent * std::clamp(config.modalWires, 0.0f, 2.0f);
+		wireCoef = dyn::DecayCoef(std::max(config.modalWireDecay, 5.0f) * (0.5f + decayEff));
+		wireBp.set_f_q<stmlib::FREQUENCY_FAST>(std::clamp(config.modalWireTone, 500.0f, 12000.0f) / systemSampleRate, 1.2f);
+	}
 }
 
 
@@ -127,6 +136,16 @@ void Snare::CalcOutput()
 		break;
 	}
 
+	case modal: {
+		float wires = 0.0f;
+		if (wireEnv > 1e-5f) {
+			wires = wireEnv * wireBp.Process<stmlib::FILTER_MODE_BAND_PASS_NORMALIZED>(intToFloatMult * static_cast<int32_t>(RNG->DR));
+			wireEnv *= wireCoef;
+		}
+		out = config.modalLevel * (modalGain * modalDrum.Process(0.0f) + wires);
+		break;
+	}
+
 	default:
 		break;
 	}
@@ -155,6 +174,10 @@ void Snare::SetEngine(const uint8_t e)
 		analogSd.Init();
 	} else if (engine == synthetic) {
 		syntheticSd.Init();
+	} else if (engine == modal) {
+		modalDrum.Reset();
+		wireBp.Reset();
+		wireEnv = 0.0f;
 	}
 	rimEnv[0] = rimEnv[1] = clickEnv = 0.0f;
 	idle = false;
@@ -181,6 +204,11 @@ uint32_t Snare::SerialiseConfig(uint8_t** buff, const uint8_t voiceIndex)
 
 void Snare::StoreConfig(uint8_t* buff, const uint32_t len)
 {
+	if (buff == nullptr && !modalReady) {
+		modalDrum.Init();						// start-up only: builds tables with pow/cos (too slow for the audio interrupt)
+		wireBp.Init();
+		modalReady = true;
+	}
 	if (buff != nullptr && len <= sizeof(config)) {
 		memcpy(&config, buff, len);
 	}

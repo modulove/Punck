@@ -38,7 +38,8 @@ public:
 
 private:
 	enum sysExCommands {StartStopSeq = 0x1A, GetSequence = 0x1B, SetSequence = 0x1C, GetVoiceConfig = 0x1D, SetVoiceConfig = 0x1E, GetSamples = 0x1F,
-		GetStatus = 0x20, SaveConfig = 0x21, GetReverbConfig = 0x22, SetReverbConfig = 0x23};
+		GetStatus = 0x20, SaveConfig = 0x21, GetReverbConfig = 0x22, SetReverbConfig = 0x23,
+		GetMixConfig = 0x24, SetMixConfig = 0x25, GetMeter = 0x26};		// modulove: master bus settings and meter
 
 	void midiEvent(const uint32_t data);
 	void ProcessSysex();

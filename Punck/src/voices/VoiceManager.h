@@ -8,6 +8,7 @@
 #include "HiHat.h"
 #include "Toms.h"
 #include "Claps.h"
+#include "Dynamics.h"
 #include <cstring>
 
 struct NoteMapper {
@@ -111,7 +112,32 @@ public:
 		float duckHoldMs = 25.0f;			// Time at full depth after each kick
 		float duckReleaseMs = 160.0f;		// Release time constant
 		float kickReverbSend = 0.0f;		// Kick into main reverb (0 = dry kick, rumble has its own path)
+
+		// Master bus: glue compressor -> clipper (appended fields: older saved blocks keep these defaults)
+		float compOn = 1.0f;				// 0 = compressor bypassed
+		float compThreshold = -12.0f;		// dBFS (1.0 = DAC full scale)
+		float compRatio = 3.0f;
+		float compAttack = 15.0f;			// ms: slow enough to let the drum transients through
+		float compRelease = 120.0f;			// ms
+		float compKnee = 6.0f;				// dB
+		float compMakeup = 3.0f;			// dB
+		float compMix = 1.0f;				// Parallel (New York) blend: 0 = dry, 1 = fully compressed
+		float compScHpf = 90.0f;			// Detector high-pass (Hz): sub energy pumps the bus less
+		float compKick = 0.0f;				// 0 = kick bypasses the compressor (no pumping, still clipped), 1 = kick goes through it
+		float clipMode = 1.0f;				// 0 = original tanh, 1 = soft clip, 2 = hard clip (both anti-aliased)
+		float clipDrive = 2.0f;				// dB into the clipper
+		float outTrim = 0.0f;				// dB after the clipper
 	} mixConfig;
+
+	struct Meter {
+		float reductionDb;					// Maximum compressor gain reduction since last read
+		float clipDb;						// Maximum level into the clipper (dB, > 0 = clipping)
+		float peakDb;						// Maximum output level (dBFS)
+		float cpuAvg;						// Audio interrupt load (%)
+		float cpuMax;
+		float underruns;
+	};
+	void GetMeter(Meter& m);					// Reads and resets the peak values
 
 	float duckLevel = 0.0f;										// Current duck amount (0 - 1)
 	volatile uint32_t sampleClock = 0;							// Counts output samples (48kHz)
@@ -129,6 +155,13 @@ private:
 	uint32_t lastClockSample = 0;
 	uint32_t lastKickSample = 0;
 	float kickIntervalSamples = 0.0f;
+
+	// Master bus dynamics
+	dyn::Compressor compressor;
+	dyn::Clipper clipper[2];
+	float clipGain = 1.0f;
+	float outGain = 1.0f;
+	float meterReduction = 0.0f, meterClip = 0.0f, meterPeak = 0.0f;
 
 	// Long press engine switching and LED feedback
 	static constexpr uint32_t longPressMs = 700;

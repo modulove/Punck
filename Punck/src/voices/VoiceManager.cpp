@@ -139,17 +139,42 @@ void VoiceManager::Output()
 	const float samplesGain = 1.0f - mixConfig.duckSamplers * duckLevel;
 	const float reverbGain  = 1.0f - mixConfig.duckReverb * duckLevel;
 
+	// Drum bus: everything except the dry kick (the kick joins the bus only if compKick is set)
+	const float reverbOut[2] = {reverbL, reverbR};
+	const bool kickThroughComp = mixConfig.compKick > 0.5f;
+	float bus[2];
+	for (uint8_t c = 0; c < 2; ++c) {
+		bus[c] = drumsGain * drumsOut[c] + samplesGain * samplesOut[c] + reverbGain * reverbOut[c] + (kickThroughComp ? kickOut[c] : 0.0f);
+	}
+
+	if (mixConfig.compOn > 0.5f) {
+		const float gain = compressor.Gain(bus[left], bus[right]);
+		const float busGain = (1.0f - mixConfig.compMix) + mixConfig.compMix * gain;		// parallel blend
+		bus[left] *= busGain;
+		bus[right] *= busGain;
+		meterReduction = std::max(meterReduction, compressor.ReductionDb());
+	}
+
 	float combinedOutput[2];
 	for (uint8_t c = 0; c < 2; ++c) {
-		combinedOutput[c] = kickOut[c] + drumsGain * drumsOut[c] + samplesGain * samplesOut[c];
+		combinedOutput[c] = bus[c] + (kickThroughComp ? 0.0f : kickOut[c]);
 	}
 
 	if (std::abs(combinedOutput[left])  > 1.0f) { ++leftOverflow; }		// Debug
 	if (std::abs(combinedOutput[right]) > 1.0f) { ++rightOverflow; }
 
-	// Apply some soft clipping
-	combinedOutput[left] = FastTanh(combinedOutput[left] + reverbGain * reverbL);
-	combinedOutput[right] = FastTanh(combinedOutput[right] + reverbGain * reverbR);
+	if (mixConfig.clipMode < 0.5f) {
+		combinedOutput[left] = FastTanh(combinedOutput[left]);		// Original soft clipping
+		combinedOutput[right] = FastTanh(combinedOutput[right]);
+	} else {
+		const bool hard = mixConfig.clipMode > 1.5f;
+		for (uint8_t c = 0; c < 2; ++c) {
+			const float x = combinedOutput[c] * clipGain;
+			meterClip = std::max(meterClip, std::abs(x));
+			combinedOutput[c] = clipper[c].Process(x, hard) * outGain;
+		}
+	}
+	meterPeak = std::max(meterPeak, std::max(std::abs(combinedOutput[left]), std::abs(combinedOutput[right])));
 
 
 	const float outputScale = 2147483648.0f * adjOutputScale;
@@ -486,6 +511,27 @@ void VoiceManager::StoreMixConfig(const uint8_t* buff, const uint32_t len)
 	}
 	const float releaseSamples = std::max(mixConfig.duckReleaseMs, 1.0f) * 0.001f * systemSampleRate;
 	duckReleaseCoef = std::exp(-1.0f / releaseSamples);
+
+	auto& m = mixConfig;
+	compressor.Configure(systemSampleRate, std::clamp(m.compThreshold, -60.0f, 0.0f), std::clamp(m.compRatio, 1.0f, 30.0f),
+			std::clamp(m.compKnee, 0.0f, 24.0f), m.compAttack, m.compRelease, std::clamp(m.compMakeup, -12.0f, 24.0f), m.compScHpf);
+	m.compMix = std::clamp(m.compMix, 0.0f, 1.0f);
+	clipGain = std::pow(10.0f, std::clamp(m.clipDrive, -12.0f, 24.0f) / 20.0f);
+	outGain = std::pow(10.0f, std::clamp(m.outTrim, -24.0f, 0.0f) / 20.0f);
+}
+
+
+void VoiceManager::GetMeter(Meter& m)
+{
+	auto toDb = [](const float x) { return 20.0f * std::log10(std::max(x, 1e-5f)); };
+	m.reductionDb = meterReduction;
+	m.clipDb = toDb(meterClip);
+	m.peakDb = toDb(meterPeak);
+	m.cpuAvg = cpuLoad.avg * 100.0f;
+	m.cpuMax = cpuLoad.max * 100.0f;
+	m.underruns = static_cast<float>(i2sUnderrun);
+	meterReduction = meterClip = meterPeak = 0.0f;
+	cpuLoad.max = 0.0f;
 }
 
 

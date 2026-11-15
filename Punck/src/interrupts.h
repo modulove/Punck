@@ -25,7 +25,21 @@ void SPI2_IRQHandler()									// I2S Interrupt
 		return;
 	}
 
+	const uint32_t cycleStart = DWT->CYCCNT;
 	voiceManager.Output();
+	{
+		// CPU load = cycles spent in Output / cycles between interrupts (self calibrating)
+		const uint32_t used = DWT->CYCCNT - cycleStart;
+		const uint32_t period = cycleStart - cpuLoad.lastStart;
+		cpuLoad.lastStart = cycleStart;
+		if (period > 1000 && period < 100000) {
+			const float load = static_cast<float>(used) / static_cast<float>(period);
+			cpuLoad.avg = cpuLoad.avg + 0.0005f * (load - cpuLoad.avg);
+			if (load > cpuLoad.max) {
+				cpuLoad.max = load;
+			}
+		}
+	}
 
 #if (TIMINGDEBUG)
 	outputTime = TIM3->CNT;

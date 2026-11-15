@@ -25,6 +25,15 @@ static constexpr float systemMaxFreq = 22000.0f;
 extern volatile uint16_t ADC_array[ADC1_BUFFER_LENGTH + ADC2_BUFFER_LENGTH];
 extern uint32_t i2sUnderrun;					// Debug counter for I2S underruns
 
+// Audio interrupt load, measured with the DWT cycle counter (fraction of the 48 kHz sample period)
+struct CpuLoad {
+	volatile float avg = 0.0f;
+	volatile float max = 0.0f;
+	uint32_t lastStart = 0;
+};
+extern CpuLoad cpuLoad;
+void InitCycleCounter();
+
 // Define ADC array positions of various controls
 enum ADC_Controls {
 	ADC_KickAttack		= 0,

@@ -8,7 +8,16 @@
 
 volatile uint32_t SysTickVal;		// 1 ms resolution
 uint32_t i2sUnderrun = 0;				// Debug counter for I2S underruns
+CpuLoad cpuLoad;
 extern uint32_t SystemCoreClock;
+
+void InitCycleCounter()
+{
+	CoreDebug->DEMCR |= CoreDebug_DEMCR_TRCENA_Msk;
+	DWT->LAR = 0xC5ACCE55;				// Cortex-M7: unlock DWT
+	DWT->CYCCNT = 0;
+	DWT->CTRL |= DWT_CTRL_CYCCNTENA_Msk;
+}
 
 // Create DMA buffer that need to live in non-cached memory area
 volatile uint16_t __attribute__((section (".dma_buffer"))) ADC_array[ADC1_BUFFER_LENGTH + ADC2_BUFFER_LENGTH];
@@ -36,6 +45,7 @@ int main(void) {
 	extFlash.Init();				// Initialise external QSPI Flash
 	configManager.RestoreConfig();	// Restore configuration settings (voice config, MIDI mapping, drum sequences)
 	usb.Init(false);				// Pass false to indicate hard reset
+	InitCycleCounter();				// CPU load meter
 	InitI2S();						// Initialise I2S which will start main sample interrupts
 
 	while (1) {

@@ -106,6 +106,9 @@ void CDCHandler::ProcessCommand()
 				"midimap     -  Display MIDI note mapping\r\n"
 				"midichn:x   -  Set drum map MIDI channel (0 = omni)\r\n"
 				"pitchchn:v,c   Set chromatic channel c (0 = off) for voice v (1-7, order as midimap)\r\n"
+				"mix         -  Show master bus (compressor, clipper) and ducking settings\r\n"
+				"mix:i,v     -  Set mix setting i to value v (saveconfig to keep)\r\n"
+				"cpu         -  Audio CPU load and compressor / clipper meter\r\n"
 				"reboot      -  Reboot device\r\n"
 				"leds:x      -  Set all LEDs to brightness from 1-100%\r\n"
 				"revertleds  -  Reset all LEDs\r\n"
@@ -169,6 +172,33 @@ void CDCHandler::ProcessCommand()
 #else
 		printf("I2C Underrun: %ld\r\n", i2sUnderrun);
 #endif
+
+	} else if (cmd.compare("cpu") == 0) {						// Audio CPU load and master bus meter
+		VoiceManager::Meter m;
+		voiceManager.GetMeter(m);
+		printf("CPU avg: %.1f%%  max: %.1f%%  underruns: %lu\r\n", m.cpuAvg, m.cpuMax, i2sUnderrun);
+		printf("Comp reduction max: %.1f dB  into clipper: %+.1f dB  output peak: %+.1f dBFS\r\n", m.reductionDb, m.clipDb, m.peakDb);
+
+	} else if (cmd.compare(0, 3, "mix") == 0) {					// Show or set master bus / ducking parameters: mix or mix:index,value
+		static constexpr const char* names[] = {"duckDrums", "duckSamplers", "duckReverb", "duckHoldMs", "duckReleaseMs", "kickReverbSend",
+				"compOn", "compThreshold dB", "compRatio", "compAttack ms", "compRelease ms", "compKnee dB", "compMakeup dB", "compMix",
+				"compScHpf Hz", "compKick", "clipMode 0 tanh 1 soft 2 hard", "clipDrive dB", "outTrim dB"};
+		constexpr uint32_t count = sizeof(VoiceManager::MixConfig) / sizeof(float);
+		static_assert(sizeof(names) / sizeof(names[0]) == count, "mix names out of sync with MixConfig");
+		float* values = reinterpret_cast<float*>(&voiceManager.mixConfig);
+		if (cmd.size() > 4 && cmd[3] == ':') {
+			char* end = nullptr;
+			const long idx = strtol(cmd.data() + 4, &end, 10);	// nano.specs has no scanf float support: parse by hand
+			if (end && *end == ',' && idx >= 0 && idx < (long)count) {
+				values[idx] = strtof(end + 1, nullptr);
+				voiceManager.StoreMixConfig(nullptr, 0);		// Recalculate coefficients (not saved until saveconfig)
+			} else {
+				printf("Format: mix:index,value\r\n");
+			}
+		}
+		for (uint32_t i = 0; i < count; ++i) {
+			printf("%2lu %-30s %8.2f\r\n", i, names[i], values[i]);
+		}
 
 	} else if (cmd.compare("resettiming") == 0) {				// Print timing debug info
 		loopTime = 0;

@@ -187,6 +187,33 @@ void MidiHandler::ProcessSysex()
 			break;
 		}
 
+		case GetMixConfig:
+		{
+			const uint8_t cfgHeader = GetMixConfig;
+			uint8_t* cfgBuffer = nullptr;
+			const uint32_t bytes = voiceManager.GetMixConfig(&cfgBuffer);
+			const uint32_t len = ConstructSysEx(cfgBuffer, bytes, &cfgHeader, 1, split);
+			usb->SendData(sysExOut, len, inEP);
+			break;
+		}
+
+		case SetMixConfig:
+		{
+			const uint32_t bytes = ReadCfgSysEx(1);
+			voiceManager.StoreMixConfig(configManager.configBuffer, bytes);
+			break;
+		}
+
+		case GetMeter:
+		{
+			const uint8_t cfgHeader = GetMeter;
+			VoiceManager::Meter meter;
+			voiceManager.GetMeter(meter);
+			const uint32_t len = ConstructSysEx(reinterpret_cast<uint8_t*>(&meter), sizeof(meter), &cfgHeader, 1, split);
+			usb->SendData(sysExOut, len, inEP);
+			break;
+		}
+
 		case StartStopSeq:
 			sequencer.StartStop(sysEx[1]);
 			break;

@@ -44,6 +44,12 @@ details summary { color: var(--dim); cursor: pointer; font-size: 12px; }
 #log { grid-column: 1 / -1; background: #0f1113; border: 1px solid var(--line); border-radius: 8px; padding: 6px 10px; color: var(--dim); font: 11px/1.4 ui-monospace, Consolas, monospace; max-height: 90px; overflow: auto; white-space: pre-wrap; }
 input[type=range] { accent-color: var(--accent); width: 90px; }
 .kbd { color: var(--dim); font-size: 10px; display: block; font-weight: normal; }
+.meter { display: grid; grid-template-columns: 70px 1fr 64px; gap: 3px 8px; align-items: center; font-size: 11px; color: var(--dim); margin: 2px 0 8px; }
+.meter .bar { height: 8px; background: var(--knob); border-radius: 4px; overflow: hidden; }
+.meter .bar > div { height: 100%; width: 0; background: var(--accent2); transition: width .12s; }
+.meter .bar.gr > div { background: var(--accent); }
+.meter .bar.hot > div { background: var(--bad); }
+.meter .num { font-variant-numeric: tabular-nums; color: var(--text); text-align: right; }
 </style>
 </head>
 <body>
@@ -99,7 +105,8 @@ input[type=range] { accent-color: var(--accent); width: 90px; }
 // ---------------------------------------------------------------------------------------------
 // Protocol (Punck/src/usb/MidiHandler.cpp) and config struct layouts (Punck/src/voices/*.h)
 // ---------------------------------------------------------------------------------------------
-const CMD = { StartStop: 0x1A, GetVoiceConfig: 0x1D, SetVoiceConfig: 0x1E, SaveConfig: 0x21, GetReverbConfig: 0x22, SetReverbConfig: 0x23 };
+const CMD = { StartStop: 0x1A, GetVoiceConfig: 0x1D, SetVoiceConfig: 0x1E, SaveConfig: 0x21, GetReverbConfig: 0x22, SetReverbConfig: 0x23,
+              GetMixConfig: 0x24, SetMixConfig: 0x25, GetMeter: 0x26 };
 const SR = 48000, LN2 = Math.log(2), LN1000 = Math.log(0.001);
 
 // Field lists in struct order: [name, count, type] (type "b" = raw bytes, default float). The modulove firmware
@@ -107,7 +114,9 @@ const SR = 48000, LN2 = Math.log(2), LN1000 = Math.log(0.001);
 const STRUCTS = {
   Kick:   { voice: 0, fields: [["ramp1Inc",1],["ramp2Inc",1],["ramp3Inc",1],["fastSinFreq",1],["initSlowSinFreq",1],["sineSlowDownRate",1],
             ["engine",1],["pitch",1],["tone",1],["fmRatio",1],["fmPitchEnv",1],["fmPitchDecay",1],["drive",1],["rumbleFeedback",1],["rumbleCutoff",1],
-            ["rumbleDrive",1],["rumbleDuck",1],["rumbleLevel",1],["rumblePunch",1],["tap2",1],["tap3",1],["tap4",1]] },
+            ["rumbleDrive",1],["rumbleDuck",1],["rumbleLevel",1],["click",1],["tap2",1],["tap3",1],["tap4",1],
+            ["sweep",1],["curve",1],["sustain",1],["color",1],["clickDecay",1],["fxMode",1],["tapLength",1],["tapDirect",1],["rumbleNoise",1],
+            ["rumbleGrit",1],["subLevel",1],["rumbleWidth",1],["rumbleHp",1]] },
   Snare:  { voice: 1, fields: [["noiseInitLevel",1],["noiseDecay",1],["baseFreq",1],["basePos",1],["partialDecay",1],["partialInitLevel",3],["partialFreqOffset",3],
             ["engine",1],["pitch",1],["tone",1],["decayP",1],["rimDecay",1],["rimRatio",1]] },
   HiHat:  { voice: 2, fields: [["attackInc",1],["decay",1],["hpInitCutoff",1],["hpFinalCutoff",1],["hpCutoffInc",1],["lpInitCutoff",1],["lpFinalCutoff",1],["lpCutoffInc",1],["noiseInitLevel",1],["noiseDecay",1],["partialScale",6],["partialFreq",6],
@@ -116,6 +125,9 @@ const STRUCTS = {
   Toms:   { voice: 5, fields: [["decaySpeed",2],["rampInc",1],["baseFreq",1],["sineFreqScale",2],["sineInitLevel",2],["sineSlowDownRate",1]] },
   Claps:  { voice: 6, fields: [["initLevel",1],["reverbInitLevel",1],["initDecay",1],["reverbDecay",1],["filterCutoff",1],["filterQ",1],["unfilteredNoiseLevel",1]] },
   Reverb: { voice: -1, fields: [["reverbLevel",1],["mixerBaseDelay",1],["diffuserCount",1],["mixerChannels",1],["filterCutoff",1]] },
+  Mix:    { voice: -2, fields: [["duckDrums",1],["duckSamplers",1],["duckReverb",1],["duckHoldMs",1],["duckReleaseMs",1],["kickReverbSend",1],
+            ["compOn",1],["compThreshold",1],["compRatio",1],["compAttack",1],["compRelease",1],["compKnee",1],["compMakeup",1],["compMix",1],
+            ["compScHpf",1],["compKick",1],["clipMode",1],["clipDrive",1],["outTrim",1]] },
 };
 
 // ---------------------------------------------------------------------------------------------
@@ -155,10 +167,15 @@ const FACTORY = PRESETS["Factory (upstream)"];
 // Defaults of the fields added by the modulove firmware (same as the firmware's Config structs)
 const NEWDEF = {
   Kick: { engine: 1, pitch: 49, tone: 0.45, fmRatio: 1.41, fmPitchEnv: 3, fmPitchDecay: 22, drive: 0.25, rumbleFeedback: 0.86, rumbleCutoff: 140,
-          rumbleDrive: 0.6, rumbleDuck: 0.9, rumbleLevel: 1.4, rumblePunch: 0.3, tap2: 0.6, tap3: 0.4, tap4: 0.25 },
+          rumbleDrive: 0.6, rumbleDuck: 0.9, rumbleLevel: 1.4, click: 0.5, tap2: 0.6, tap3: 0.4, tap4: 0.25,
+          sweep: 24, curve: 0.5, sustain: 0.35, color: 0.15, clickDecay: 6, fxMode: 0, tapLength: 0.4, tapDirect: 0, rumbleNoise: 0.2,
+          rumbleGrit: 0.4, subLevel: 0.3, rumbleWidth: 0.4, rumbleHp: 30 },
   Snare: { engine: 1, pitch: 200, tone: 0.5, decayP: 0.35, rimDecay: 45, rimRatio: 2.17 },
   HiHat: { decayMin: 0.998, decayRange: 0.0028, decayMax: 0.99985, ringModLevel: 0.6, ringModOpenStart: 0.35, gritHold: 3, randomThreshold: 0.96, randomSkew: 2,
            partialFM: [0, 8, 1, 6, 1, 0, 0, 0], engine: 1, pitch: 400, tone: 0.6, noisiness: 0.35 },
+  Mix: { duckDrums: 0, duckSamplers: 0, duckReverb: 0, duckHoldMs: 25, duckReleaseMs: 160, kickReverbSend: 0,
+         compOn: 1, compThreshold: -12, compRatio: 3, compAttack: 15, compRelease: 120, compKnee: 6, compMakeup: 3, compMix: 1,
+         compScHpf: 90, compKick: 0, clipMode: 1, clipDrive: 2, outTrim: 0 },
 };
 for (const s in NEWDEF) FACTORY[s] = { ...NEWDEF[s], ...FACTORY[s] };
 // Engine choices on top of the existing presets
@@ -166,14 +183,27 @@ Object.assign(PRESETS["Factory (upstream)"].Kick, { engine: 0 }); Object.assign(
 Object.assign(PRESETS["Deep techno"].Kick, { engine: 1, pitch: 46, tone: 0.42 });
 Object.assign(PRESETS["Deep techno"].Snare, { engine: 1, pitch: 190, tone: 0.5, decayP: 0.3 });
 Object.assign(PRESETS["Deep techno"].HiHat, { engine: 2, pitch: 420, tone: 0.65, noisiness: 0.45 });
-Object.assign(PRESETS["Dub techno"].Kick, { engine: 4, pitch: 45, tone: 0.35, rumbleFeedback: 0.9, rumbleCutoff: 120, rumbleDrive: 0.5, rumbleLevel: 1.6, tap2: 0.6, tap3: 0.45, tap4: 0.3 });
+Object.assign(PRESETS["Dub techno"].Kick, { engine: 4, pitch: 45, tone: 0.35, rumbleFeedback: 0.9, rumbleCutoff: 120, rumbleDrive: 0.5, rumbleLevel: 1.6, tap2: 0.6, tap3: 0.45, tap4: 0.3,
+  sweep: 18, curve: 0.3, sustain: 0.45, color: 0.1, click: 0.35, clickDecay: 5, rumbleGrit: 0.35, rumbleNoise: 0.15, subLevel: 0.35, rumbleWidth: 0.5, tapLength: 0.5 });
 Object.assign(PRESETS["Dub techno"].Snare, { engine: 3, pitch: 380, rimDecay: 55, rimRatio: 2.17 });
 Object.assign(PRESETS["Dub techno"].HiHat, { engine: 1, pitch: 380, tone: 0.5, noisiness: 0.3 });
 PRESETS["Hard techno (FM)"] = { ...JSON.parse(JSON.stringify(PRESETS["Deep techno"])) };
 Object.assign(PRESETS["Hard techno (FM)"].Kick, { engine: 3, pitch: 50, fmRatio: 1.41, fmPitchEnv: 4, fmPitchDecay: 18, drive: 0.55 });
 Object.assign(PRESETS["Hard techno (FM)"].Snare, { engine: 2, pitch: 210, tone: 0.6, decayP: 0.3 });
-const ENGINES = { Kick: ["Classic", "Deep (808)", "Punch (909)", "FM", "Rumble"], Snare: ["Classic", "Analog (808)", "Synthetic (909)", "Rim / clave"],
+PRESETS["Hypnotic rumble"] = JSON.parse(JSON.stringify(PRESETS["Deep techno"]));
+Object.assign(PRESETS["Hypnotic rumble"].Kick, { engine: 4, pitch: 47, tone: 0.5, drive: 0.3, fxMode: 0, sweep: 26, curve: 0.65, sustain: 0.3, color: 0.2,
+  click: 0.6, clickDecay: 6, rumbleFeedback: 0.88, rumbleCutoff: 150, rumbleDrive: 0.65, rumbleGrit: 0.5, rumbleDuck: 0.9, rumbleLevel: 1.5,
+  rumbleNoise: 0.3, subLevel: 0.25, rumbleWidth: 0.4, rumbleHp: 32, tap2: 0.7, tap3: 0.45, tap4: 0.3, tapLength: 0.35, tapDirect: 0.1 });
+const ENGINES = { Kick: ["Classic", "Deep (808)", "Punch (909)", "FM", "Rumble / groove"], Snare: ["Classic", "Analog (808)", "Synthetic (909)", "Rim / clave"],
                   HiHat: ["Classic metallic", "808 square noise", "909 ring mod"] };
+// Master bus starting points (Master section menu)
+const MASTER_PRESETS = {
+  "Original (tanh only)": { compOn: 0, clipMode: 0, clipDrive: 0, outTrim: 0 },
+  "Glue (default)": { compOn: 1, compThreshold: -12, compRatio: 3, compAttack: 15, compRelease: 120, compKnee: 6, compMakeup: 3, compMix: 1, compScHpf: 90, compKick: 0, clipMode: 1, clipDrive: 2, outTrim: 0 },
+  "Loud PA": { compOn: 1, compThreshold: -16, compRatio: 3, compAttack: 12, compRelease: 100, compKnee: 6, compMakeup: 4, compMix: 1, compScHpf: 90, compKick: 0, clipMode: 1, clipDrive: 5, outTrim: -0.5 },
+  "Parallel punch": { compOn: 1, compThreshold: -24, compRatio: 8, compAttack: 3, compRelease: 80, compKnee: 3, compMakeup: 10, compMix: 0.4, compScHpf: 60, compKick: 0, clipMode: 1, clipDrive: 2, outTrim: 0 },
+  "Kick pumps the bus": { compOn: 1, compThreshold: -18, compRatio: 4, compAttack: 2, compRelease: 180, compKnee: 6, compMakeup: 5, compMix: 1, compScHpf: 40, compKick: 1, clipMode: 1, clipDrive: 2, outTrim: 0 },
+};
 
 // ---------------------------------------------------------------------------------------------
 // Unit conversions: knobs work in musical units, the module stores per-sample coefficients
@@ -200,6 +230,14 @@ function fmt(v, unit) {
     case "x": return "×" + v.toFixed(2);
     case "int": return Math.round(v).toString();
     case "chans": return ["0", "4", "8"][Math.round(v)] + " ch";
+    case "dB": return (v > 0.05 ? "+" : "") + v.toFixed(1) + " dB";
+    case "ratio": return v.toFixed(v < 10 ? 1 : 0) + ":1";
+    case "st": return Math.round(v) + " st";
+    case "%0": return Math.round(v) + " %";
+    case "onoff": return v >= 0.5 ? "on" : "off";
+    case "clip": return ["tanh", "soft", "hard"][Math.round(v)];
+    case "fx": return ["soft", "hard", "fold"][Math.round(v)];
+    case "curve": return v < 0.2 ? "808 " + v.toFixed(2) : v > 0.8 ? "909 " + v.toFixed(2) : v.toFixed(2);
     default: return v.toFixed(Math.abs(v) < 1 ? 3 : 2);
   }
 }
@@ -208,7 +246,8 @@ function fmt(v, unit) {
 const UI = {
   Kick: { title: "Kick", hints: ["Panel: Attack = low-pass (audible on the click), Decay = length.",
       "Panel: Attack = punch → self-FM → drive, Decay = length.", "Panel: Attack = FM envelope / dirt, Decay = length.",
-      "Panel: Attack = FM depth (grit), Decay = length.", "Panel: Attack = RUMBLE amount, Decay = body length. Ghost taps follow MIDI clock / sequencer / kick interval."], controls: [
+      "Panel: Attack = FM depth (grit), Decay = length.",
+      "Panel: Attack = GROOVE amount (rumble, sub pulses, ghost kicks), Decay = length. Tone = click tone, Drive = body FX. Taps follow MIDI clock / sequencer / kick interval."], controls: [
     ["Pitch", "initSlowSinFreq", 0, "lin", "Hzn", 30, 110, "log", [0]],
     ["Pitch drop", "sineSlowDownRate", 0, "drop", "oct/s", 0, 4, "lin", [0]],
     ["Click freq", "fastSinFreq", 0, "lin", "Hz", 60, 500, "log", [0]],
@@ -221,15 +260,28 @@ const UI = {
     ["Pitch env", "fmPitchEnv", 0, "lin", "x", 0, 8, "lin", [3]],
     ["Env time", "fmPitchDecay", 0, "lin", "ms", 2, 100, "log", [3]],
     ["Drive", "drive", 0, "lin", "", 0, 1, "lin", [3, 4]],
+    ["FX", "fxMode", 0, "lin", "fx", 0, 2, "lin", [4]],
+    ["Sweep", "sweep", 0, "lin", "st", 0, 48, "lin", [4]],
+    ["Curve", "curve", 0, "lin", "curve", 0, 1, "lin", [4]],
+    ["Sustain", "sustain", 0, "lin", "", 0, 1, "lin", [4]],
+    ["Color", "color", 0, "lin", "", 0, 1, "lin", [4]],
+    ["Click", "click", 0, "lin", "", 0, 1.5, "lin", [4]],
+    ["Click decay", "clickDecay", 0, "lin", "ms", 0.5, 60, "log", [4]],
     ["Tail", "rumbleFeedback", 0, "lin", "", 0, 0.97, "lin", [4]],
     ["Cutoff", "rumbleCutoff", 0, "lin", "Hz", 40, 400, "log", [4]],
-    ["Grit", "rumbleDrive", 0, "lin", "", 0, 1, "lin", [4]],
+    ["Pre grit", "rumbleGrit", 0, "lin", "", 0, 1, "lin", [4]],
+    ["Saturate", "rumbleDrive", 0, "lin", "", 0, 1, "lin", [4]],
+    ["Noise", "rumbleNoise", 0, "lin", "", 0, 1, "lin", [4]],
+    ["Rumble HP", "rumbleHp", 0, "lin", "Hz", 10, 150, "log", [4]],
+    ["Width", "rumbleWidth", 0, "lin", "", 0, 1, "lin", [4]],
     ["Duck", "rumbleDuck", 0, "lin", "", 0, 1, "lin", [4]],
     ["Rumble lvl", "rumbleLevel", 0, "lin", "", 0, 3, "lin", [4]],
-    ["Body punch", "rumblePunch", 0, "lin", "", 0, 1, "lin", [4]],
+    ["Sub", "subLevel", 0, "lin", "", 0, 1.5, "lin", [4]],
     ["Tap 2", "tap2", 0, "lin", "", 0, 1, "lin", [4]],
     ["Tap 3", "tap3", 0, "lin", "", 0, 1, "lin", [4]],
     ["Tap 4", "tap4", 0, "lin", "", 0, 1, "lin", [4]],
+    ["Tap length", "tapLength", 0, "lin", "", 0.05, 1, "lin", [4]],
+    ["Ghost lvl", "tapDirect", 0, "lin", "", 0, 1, "lin", [4]],
   ]},
   Snare: { title: "Snare", hints: ["Panel: Filter = low-pass, Tuning = ×0.5…1.5. Higher MIDI notes = longer.",
       "Panel: Filter = snappy (noise), Tuning = pitch ×0.5…2. Higher notes / open trigger = longer.",
@@ -291,6 +343,27 @@ const UI = {
     ["Tail decay", "reverbDecay", 0, "decay", "ms", 20, 1500, "log"],
     ["Raw noise", "unfilteredNoiseLevel", 0, "lin", "", 0, 0.3, "lin"],
   ]},
+  Mix: { title: "Master", noDice: true, hint: "Bus compressor on drums, samples and reverb (kick stays out unless Kick→comp), then the clipper on everything. 'Save to Punck' keeps it.", controls: [
+    ["Comp", "compOn", 0, "lin", "onoff", 0, 1, "lin"],
+    ["Threshold", "compThreshold", 0, "lin", "dB", -40, 0, "lin"],
+    ["Ratio", "compRatio", 0, "lin", "ratio", 1, 20, "log"],
+    ["Attack", "compAttack", 0, "lin", "ms", 0.1, 100, "log"],
+    ["Release", "compRelease", 0, "lin", "ms", 20, 1000, "log"],
+    ["Knee", "compKnee", 0, "lin", "dB", 0, 18, "lin"],
+    ["Makeup", "compMakeup", 0, "lin", "dB", -6, 18, "lin"],
+    ["Parallel", "compMix", 0, "pct", "%0", 0, 100, "lin"],
+    ["SC HPF", "compScHpf", 0, "lin", "Hz", 20, 300, "log"],
+    ["Kick→comp", "compKick", 0, "lin", "onoff", 0, 1, "lin"],
+    ["Clip", "clipMode", 0, "lin", "clip", 0, 2, "lin"],
+    ["Clip drive", "clipDrive", 0, "lin", "dB", 0, 12, "lin"],
+    ["Output", "outTrim", 0, "lin", "dB", -12, 0, "lin"],
+    ["Duck drums", "duckDrums", 0, "lin", "", 0, 1, "lin"],
+    ["Duck smpl", "duckSamplers", 0, "lin", "", 0, 1, "lin"],
+    ["Duck verb", "duckReverb", 0, "lin", "", 0, 1, "lin"],
+    ["Duck hold", "duckHoldMs", 0, "lin", "ms", 0, 200, "lin"],
+    ["Duck rel", "duckReleaseMs", 0, "lin", "ms", 20, 1000, "log"],
+    ["Kick→verb", "kickReverbSend", 0, "lin", "", 0, 1, "lin"],
+  ]},
   Reverb: { title: "Reverb", hint: "Whole mix (stock fw sends the kick too - keep it low for techno).", controls: [
     ["Level", "reverbLevel", 0, "pct", "%", 0, 5, "lin"],
     ["Size", "mixerBaseDelay", 0, "lin", "int", 20, 150, "lin"],
@@ -305,7 +378,7 @@ const METAL_BASE_FREQ = FACTORY.HiHat.partialFreq, METAL_BASE_LEVEL = FACTORY.Hi
 // State
 // ---------------------------------------------------------------------------------------------
 const state = {}, tails = {}, knobs = [], locks = {}, rawLen = {};
-let midiOut = null, midiIn = null, pending = null;
+let midiOut = null, midiIn = null, pending = null, mixSupported = false;
 const undoStack = [];
 const snap = { A: null, B: null };
 
@@ -360,8 +433,11 @@ function unnibble(arr) { const out = new Uint8Array(arr.length >> 1); for (let i
 
 function sendStruct(s) {
   if (!midiOut) return;
+  if (s === "Mix" && !mixSupported) return;                       // firmware without the master bus
   const payload = nibbles(encodeStruct(s));
-  const msg = s === "Reverb" ? [0xF0, CMD.SetReverbConfig, ...payload, 0xF7] : [0xF0, CMD.SetVoiceConfig, STRUCTS[s].voice, ...payload, 0xF7];
+  const msg = s === "Reverb" ? [0xF0, CMD.SetReverbConfig, ...payload, 0xF7]
+            : s === "Mix" ? [0xF0, CMD.SetMixConfig, ...payload, 0xF7]
+            : [0xF0, CMD.SetVoiceConfig, STRUCTS[s].voice, ...payload, 0xF7];
   midiOut.send(msg);
 }
 const sendTimers = {};
@@ -391,9 +467,11 @@ function updateStatus() {
 }
 function onMidi(ev) {
   const d = ev.data;
+  if (d[0] === 0xF0 && d[1] === CMD.GetMeter) { showMeter(unnibble(d.slice(2, d.length - 1))); return; }
   if (d[0] !== 0xF0 || !pending) return;
   if (d[1] === CMD.GetVoiceConfig && pending.type === "voice" && d[2] === pending.voice) pending.resolve(unnibble(d.slice(3, d.length - 1)));
   else if (d[1] === CMD.GetReverbConfig && pending.type === "reverb") pending.resolve(unnibble(d.slice(2, d.length - 1)));
+  else if (d[1] === CMD.GetMixConfig && pending.type === "mix") pending.resolve(unnibble(d.slice(2, d.length - 1)));
 }
 function request(msg, type, voice) {
   return new Promise((resolve, reject) => {
@@ -406,10 +484,14 @@ async function readAll() {
   if (!midiOut) return log("Not connected");
   try {
     for (const s in STRUCTS) {
+      if (s === "Mix") continue;
       const bytes = s === "Reverb" ? await request([0xF0, CMD.GetReverbConfig, 0, 0xF7], "reverb")
                                    : await request([0xF0, CMD.GetVoiceConfig, STRUCTS[s].voice, 0xF7], "voice", STRUCTS[s].voice);
       decodeStruct(s, bytes);
     }
+    try { decodeStruct("Mix", await request([0xF0, CMD.GetMixConfig, 0, 0xF7], "mix", 0)); mixSupported = true; }
+    catch (e) { mixSupported = false; log("No master bus on this firmware (needs the modulove compressor build)"); }
+    sections.Mix.style.display = mixSupported ? "" : "none";
     refreshKnobs(); log("Read settings from Punck");
   } catch (e) { log("Read failed (" + e.message + ") - is the module running and the port free?"); }
 }
@@ -449,7 +531,7 @@ function makeKnob(parent, voice, def) {
   k.value = () => k.conv.fromRaw(getRaw(voice, field, idx));
   k.set = (v, send = true) => {
     v = Math.min(max, Math.max(min, v));
-    if (unit === "int" || conv === "chans") v = Math.round(v);
+    if (["int", "onoff", "clip", "fx"].includes(unit) || conv === "chans") v = Math.round(v);
     setRaw(voice, field, idx, k.conv.toRaw(v));
     if (send) queueSend(voice);
     refreshKnobs(voice);
@@ -518,14 +600,20 @@ function randomise(voice, amount, wild) {
 // Build UI
 // ---------------------------------------------------------------------------------------------
 const main = document.getElementById("main"), padsEl = document.getElementById("pads");
-for (const s of ["Kick", "Snare", "HiHat", "Toms", "Claps", "Reverb"]) {
+for (const s of ["Mix", "Kick", "Snare", "HiHat", "Toms", "Claps", "Reverb"]) {
   const u = UI[s];
   const sec = document.createElement("section"); sec.className = "voice";
   const engSel = ENGINES[s] ? `<select class="engine small" title="Sound engine (same as long press on the voice button)">${ENGINES[s].map((n, i) => `<option value="${i}">${i + 1} ${n}</option>`).join("")}</select>` : "";
-  sec.innerHTML = `<div class="head"><h2>${u.title}</h2>${engSel}
-    <button class="small dice" title="Randomise around current values">Dice</button>
-    <button class="small wild" title="Completely random (within musical range)">Wild</button>
-    <button class="small lock" title="Exclude from Dice all / Mutate">Lock</button></div><p class="hint">${u.hint || u.hints[0]}</p><div class="knobs"></div>`;
+  const masterSel = s === "Mix" ? `<select class="mpreset small" title="Master bus starting points">${Object.keys(MASTER_PRESETS).map(n => `<option>${n}</option>`).join("")}</select>` : "";
+  const meter = s === "Mix" ? `<div class="meter">
+      <span>Comp GR</span><div class="bar gr"><div id="mGr"></div></div><span class="num" id="mGrN">–</span>
+      <span>Into clip</span><div class="bar"><div id="mClip"></div></div><span class="num" id="mClipN">–</span>
+      <span>Output</span><div class="bar"><div id="mPeak"></div></div><span class="num" id="mPeakN">–</span>
+      <span>CPU</span><div class="bar"><div id="mCpu"></div></div><span class="num" id="mCpuN">–</span></div>` : "";
+  sec.innerHTML = `<div class="head"><h2>${u.title}</h2>${engSel}${masterSel}
+    ${u.noDice ? "" : `<button class="small dice" title="Randomise around current values">Dice</button>
+    <button class="small wild" title="Completely random (within musical range)">Wild</button>`}
+    <button class="small lock" title="Exclude from Dice all / Mutate">Lock</button></div><p class="hint">${u.hint || u.hints[0]}</p>${meter}<div class="knobs"></div>`;
   main.insertBefore(sec, padsEl);
   sections[s] = sec;
   const es = sec.querySelector(".engine");
@@ -537,13 +625,39 @@ for (const s of ["Kick", "Snare", "HiHat", "Toms", "Claps", "Reverb"]) {
     sec.appendChild(det); u.advanced.forEach(c => makeKnob(det.querySelector(".knobs"), s, c));
   }
   const amt = () => document.getElementById("rndAmount").value / 100 * 0.5;
-  sec.querySelector(".dice").onclick = () => { pushUndo(); randomise(s, amt(), false); log(`${u.title}: dice`); };
-  sec.querySelector(".wild").onclick = () => { pushUndo(); randomise(s, 0, true); log(`${u.title}: wild`); };
+  if (!u.noDice) {
+    sec.querySelector(".dice").onclick = () => { pushUndo(); randomise(s, amt(), false); log(`${u.title}: dice`); };
+    sec.querySelector(".wild").onclick = () => { pushUndo(); randomise(s, 0, true); log(`${u.title}: wild`); };
+  }
+  const mp = sec.querySelector(".mpreset");
+  if (mp) { mp.value = "Glue (default)"; mp.onchange = () => { pushUndo(); Object.assign(state.Mix, MASTER_PRESETS[mp.value]); sendStruct("Mix"); refreshKnobs("Mix"); log("Master: " + mp.value); }; }
   const lockBtn = sec.querySelector(".lock");
   lockBtn.onclick = () => { locks[s] = !locks[s]; lockBtn.classList.toggle("on", locks[s]); };
 }
 
 refreshKnobs();
+
+// Master meter: polled while connected (values are peaks since the previous poll)
+function setBar(id, frac, text, hot) {
+  const b = document.getElementById(id); if (!b) return;
+  b.style.width = Math.max(0, Math.min(1, frac)) * 100 + "%"; b.parentElement.classList.toggle("hot", !!hot);
+  document.getElementById(id + "N").textContent = text;
+}
+function showMeter(bytes) {
+  if (bytes.length < 24) return;
+  const dv = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength), f = i => dv.getFloat32(4 * i, true);
+  const gr = f(0), clip = f(1), peak = f(2), cpuAvg = f(3), cpuMax = f(4), under = f(5);
+  setBar("mGr", gr / 12, gr.toFixed(1) + " dB");
+  setBar("mClip", (clip + 24) / 30, (clip > 0 ? "+" : "") + clip.toFixed(1) + " dB", clip > 0);
+  setBar("mPeak", (peak + 24) / 24, peak.toFixed(1) + " dB", peak > -0.3);
+  setBar("mCpu", cpuMax / 100, cpuAvg.toFixed(0) + "/" + cpuMax.toFixed(0) + "%", cpuMax > 85 || under > lastUnderruns);
+  if (under > lastUnderruns) log(`Audio underrun counter ${under} (was ${lastUnderruns}) - CPU overload`);
+  lastUnderruns = under;
+}
+let lastUnderruns = 0;
+setInterval(() => {
+  if (midiOut && mixSupported && !pending && document.visibilityState === "visible") midiOut.send([0xF0, CMD.GetMeter, 0, 0xF7]);
+}, 250);
 
 // Header actions
 const sel = document.getElementById("selPreset");
@@ -574,7 +688,7 @@ document.getElementById("fileImport").onchange = async e => {
   const f = e.target.files[0]; if (!f) return;
   try {
     const o = JSON.parse(await f.text()); const name = f.name.replace(/\.json$/i, "");
-    PRESETS[name] = { Kick: o.Kick, Snare: o.Snare, HiHat: o.HiHat || o.Hats, Toms: o.Toms, Claps: o.Claps, Reverb: o.Reverb };
+    PRESETS[name] = { Kick: o.Kick, Snare: o.Snare, HiHat: o.HiHat || o.Hats, Toms: o.Toms, Claps: o.Claps, Reverb: o.Reverb, Mix: o.Mix };
     fillPresets(); sel.value = name; pushUndo(); loadValues(PRESETS[name]); refreshKnobs(); sendAll(); log("Imported " + f.name);
   } catch (err) { log("Import failed: " + err); }
 };

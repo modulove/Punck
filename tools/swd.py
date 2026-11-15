@@ -141,7 +141,7 @@ def cmd_watch(_):
 
 
 def cmd_flash(a):
-    rc, out = openocd("init", "halt", f"program {{{path_tcl(a.elf)}}} verify", "reset run", timeout=600)
+    rc, out = openocd("init", "punck_attach", "halt", f"program {{{path_tcl(a.elf)}}} verify", "reset run", timeout=600)
     print("\n".join(l for l in out.splitlines() if re.search(r"(Info|Warn|Error|wrote|verified|Programming)", l))[-3000:])
     if "Verified OK" not in out and "verified" not in out.lower():
         sys.exit("FLASH/VERIFY FAILED - module still has its previous firmware unless erase started; restore with backup")
@@ -149,7 +149,7 @@ def cmd_flash(a):
 
 
 def cmd_restore(a):
-    rc, out = openocd("init", "halt", f"program {{{path_tcl(a.bin)}}} 0x{FLASH_BASE:08x} verify", "reset run", timeout=900)
+    rc, out = openocd("init", "punck_attach", "halt", f"program {{{path_tcl(a.bin)}}} 0x{FLASH_BASE:08x} verify", "reset run", timeout=900)
     print("\n".join(l for l in out.splitlines() if re.search(r"(Info|Warn|Error|wrote|verified)", l))[-3000:])
     if "verified" not in out.lower():
         sys.exit("RESTORE/VERIFY FAILED")

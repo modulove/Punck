@@ -37,8 +37,8 @@ def ffmpeg():
 
 
 def clean_name(stem, maxlen=18):
-    stem = re.sub(r"\.v\d+$", "", stem)                      # drop existing volume tags
     stem = re.sub(r"^[ABab]\d+[_\-. ]*", "", stem)           # drop existing bank/slot prefix
+    stem = re.sub(r"\.?v\d{2,3}(?=[_\-.]|$)[_\-]?", "", stem)  # drop existing volume tags (.v100 / v100_)
     stem = re.sub(r"[^A-Za-z0-9\-]+", "-", stem).strip("-").lower()
     return (stem or "smp")[:maxlen]
 
@@ -133,6 +133,11 @@ def do_check(a):
                 print(f"  pos {i + 1:2d} slot {slot:3d}  {f[:38]:38s} {info.get('ch', '?')}ch {info.get('bits', '?')}bit "
                       f"{secs:5.2f}s vol {vol.group(1) if vol else '100'}%  [{midi}]  {' '.join(warn)}")
     print(f"\nTotal {total_bytes / 1e6:.2f} MB of ~31.9 MB")
+    # The Punck's console 'format' creates a FAT16 root directory with only 128 entries. A long file name
+    # needs one entry per 13 characters plus the 8.3 entry; Windows' System Volume Information uses ~3.
+    entries = 3 + sum(1 if re.fullmatch(r"[A-Z0-9_]{1,8}\.WAV", f) else 1 + -(-len(f) // 13) for f in files)
+    print(f"Root directory entries: {entries} of 128" +
+          ("  ** TOO MANY - use names of max 13 characters (e.g. A01_ride.wav) **" if entries > 128 else ""))
 
 
 def main():

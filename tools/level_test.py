@@ -272,7 +272,7 @@ def cmd_sweep(a, p):
 
 
 MASTER = {
-    "original": {6: 0, 16: 0},
+    "original": {6: 0, 16: 0, 19: 0},          # upstream output stage: no trim, tanh
     "glue":     {6: 1, 7: -12, 8: 3, 9: 15, 10: 120, 11: 6, 12: 3, 13: 1, 14: 90, 15: 0, 16: 1, 17: 2, 18: 0},
     "loud":     {6: 1, 7: -16, 8: 3, 9: 12, 10: 100, 11: 6, 12: 4, 13: 1, 14: 90, 15: 0, 16: 1, 17: 5, 18: -0.5},
     "warm":     {6: 1, 7: -12, 8: 3, 9: 15, 10: 120, 11: 6, 12: 3, 13: 1, 14: 90, 15: 0, 16: 3, 17: 2, 18: 0},
@@ -299,9 +299,12 @@ def cmd_groove(a, p):
     rows = []
     try:
         for name in a.master:
-            for idx, v in MASTER[name].items():
+            settings = dict(MASTER[name])
+            settings.setdefault(19, saved.get(19, 0.0))             # keep the module's own input trim (original: 0)
+            for idx, v in settings.items():
                 p.cmd(f"mix:{idx},{v}", wait=0.05)
             path = os.path.join(OUT, f"groove_{name}.wav")
+            p.cmd("cpu", wait=0.3)                                   # resets the module's peak meter
             rec = subprocess.Popen(record_cmd(a.device, seconds + 2.5, path), stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
             time.sleep(1.0)                                          # DirectShow start-up
             t0 = time.perf_counter()
@@ -312,6 +315,9 @@ def cmd_groove(a, p):
                 if hits:
                     p.send("play:" + ";".join(hits))
             rec.wait()
+            meter = p.cmd("cpu", wait=0.4)
+            gr = re.search(r"reduction max: ([\d.]+)", meter)
+            clip = re.search(r"into clipper: ([+-][\d.]+)", meter)
             rate, ch = read_wav(path)
             mono = [0.5 * (l + r) for l, r in zip(ch[0], ch[-1])]
             start = next((i for i, v in enumerate(mono) if abs(v) > 0.01), 0)
@@ -319,14 +325,15 @@ def cmd_groove(a, p):
             pk = db(max(peak(seg_l), peak(seg_r)))
             rm = db(math.sqrt((rms(seg_l) ** 2 + rms(seg_r) ** 2) / 2))
             lufs, lra, tp = loudness(path)
-            rows.append((name, lufs, tp, pk, rm, pk - rm))
+            rows.append((name, lufs, tp, pk, rm, pk - rm, float(gr.group(1)) if gr else float("nan"),
+                         float(clip.group(1)) if clip else float("nan")))
     finally:
         for idx, v in saved.items():
             p.cmd(f"mix:{idx},{v}", wait=0.05)
-    print("\n  master      LUFS-I   true peak   sample peak   rms      crest")
-    for name, lufs, tp, pk, rm, cr in rows:
+    print("\n  master      LUFS-I   true peak   sample peak   rms      crest     | module: comp GR max   into clipper")
+    for name, lufs, tp, pk, rm, cr, gr, clip in rows:
         print(f"  {name:10s} {lufs if lufs is not None else float('nan'):7.1f}   {tp if tp is not None else float('nan'):7.1f}     "
-              f"{pk:7.1f}      {rm:6.1f}   {cr:5.1f} dB")
+              f"{pk:7.1f}      {rm:6.1f}   {cr:5.1f} dB  |      {gr:5.1f} dB        {clip:+5.1f} dB")
     print("\n(levels are interface dBFS; the module settings were restored afterwards)")
 
 

@@ -190,6 +190,12 @@ void Kick::Play(const uint8_t voice, const uint32_t noteOffset, const uint32_t n
 	accent = std::clamp(velocity, 0.0f, 1.0f);
 	trigger = true;
 
+	// Decay pot with the random zone at the top of its travel
+	const float pot = static_cast<float>(ADC_array[ADC_KickDecay]) / 65536.0f;
+	hitInZone = config.randomZone > 0.0f && pot >= 1.0f - std::clamp(config.randomZone, 0.0f, 0.5f);
+	hitDecay = RandomZone(pot, config.randomZone, config.randomLongMin, config.randomLongMax, config.randomBase,
+			stmlib::Random::GetFloat(), stmlib::Random::GetFloat());
+
 	switch (engine) {
 	case classic:
 		phase = Phase::Ramp1;
@@ -208,12 +214,12 @@ void Kick::Play(const uint8_t voice, const uint32_t noteOffset, const uint32_t n
 		// Coefficients once per hit (Attack/Decay pots are read at the hit)
 		fmPitchCoef = dyn::ExpNeg(1.0f / (std::max(config.fmPitchDecay, 1.0f) * 48.0f));
 		fmIndexCoef = dyn::ExpNeg(1.0f / ((4.0f + 40.0f * knobA) * 48.0f));
-		fmAmpCoef = dyn::DecayCoef(80.0f * dyn::FastExp2(4.9658f * knobB));			// 80 ms .. 2.5 s
+		fmAmpCoef = dyn::DecayCoef(80.0f * dyn::FastExp2(4.9658f * hitDecay));		// 80 ms .. 2.5 s
 		fmIndex = 5.0f * knobA;
 		break;
 
 	case rumble: {
-		body.Trigger(BodyParams(knobB, 1.0f, 1.0f), accent);
+		body.Trigger(BodyParams(hitDecay, 1.0f, 1.0f), accent);
 		noiseEnv = std::max(noiseEnv, accent * config.rumbleNoise);
 
 		// Ghost taps on the next three 16ths (Groove style): a copy of the kick into the rumble, plus a sub pulse
@@ -280,7 +286,7 @@ void Kick::CalcClassic()
 	{
 		slowSinInc *= config.sineSlowDownRate;			// Sine wave slowly decreases in frequency
 		position += slowSinInc;							// Set current poition in sine wave
-		const float decaySpeed = 0.9994f + 0.00055f * static_cast<float>(ADC_array[ADC_KickDecay]) / 65536.0f;
+		const float decaySpeed = 0.9994f + 0.00055f * DecayParam();
 		slowSinLevel = slowSinLevel * decaySpeed;
 		currentLevel = std::sin(position) * slowSinLevel;
 
@@ -353,14 +359,15 @@ void Kick::CalcOutput()
 		const float attackFm = std::min(h * 4.0f, 1.0f);
 		const float selfFm = std::clamp(h * 4.0f - 1.0f, 0.0f, 1.0f);
 		const float drive = std::max(h * 2.0f - 1.0f, 0.0f) * std::max(1.0f - 16.0f * f0, 0.0f);
-		analogBd.Render(false, trigger, accent, f0, config.tone, knobB, attackFm, selfFm, &out, 1);
+		analogBd.Render(false, trigger, accent, f0, config.tone, DecayParam(), attackFm, selfFm, &out, 1);
 		out = Saturate(out, drive);
 		break;
 	}
 
 	case punch: {
 		const float h = knobA;
-		syntheticBd.Render(false, trigger, accent, f0, config.tone, knobB, 0.4f - 0.25f * knobB * knobB,
+		const float d = DecayParam();
+		syntheticBd.Render(false, trigger, accent, f0, config.tone, d, 0.4f - 0.25f * d * d,
 				std::min(h * 2.0f, 1.0f), std::max(h * 2.0f - 1.0f, 0.0f), &out, 1);
 		break;
 	}
@@ -391,6 +398,17 @@ void Kick::CalcOutput()
 	ledEnv = std::max(std::abs(out), ledEnv * 0.9997f);
 	noteMapper->pwmLed.Level(std::min(ledEnv, 1.0f));
 	CheckIdle(std::abs(out), false);
+}
+
+
+float Kick::DecayParam() const
+{
+	// Randomised hits keep their length; otherwise follow the (smoothed) pot, rescaled below the random zone
+	if (hitInZone) {
+		return hitDecay;
+	}
+	const float zone = std::clamp(config.randomZone, 0.0f, 0.5f);
+	return std::min(knobB / (1.0f - zone), 1.0f);
 }
 
 
@@ -475,7 +493,7 @@ void Kick::CalcRumble(float& outL, float& outR)
 		if (t > 0 && --t == 0) {
 			t = -1;
 			const float tapLevel = accent * (i == 0 ? config.tap2 : i == 1 ? config.tap3 : config.tap4);
-			ghost.Trigger(BodyParams(knobB, std::clamp(config.tapLength, 0.05f, 1.0f), 0.4f), tapLevel);
+			ghost.Trigger(BodyParams(hitDecay, std::clamp(config.tapLength, 0.05f, 1.0f), 0.4f), tapLevel);
 			noiseEnv = std::max(noiseEnv, tapLevel * config.rumbleNoise);
 			subPeak = tapLevel;
 			subAttack = true;

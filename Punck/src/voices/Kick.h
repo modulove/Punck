@@ -108,6 +108,9 @@ private:
 	float accent = 0.8f;
 	bool trigger = false;				// Pending trigger for the sample based engines
 	float knobA = 0.5f, knobB = 0.5f;	// Smoothed Attack / Decay pots (0 - 1)
+	float hitDecay = 0.5f;				// Decay for the current hit (random zone applied)
+	bool hitInZone = false;				// Current hit was randomised: hold hitDecay instead of following the pot
+	float DecayParam() const;
 	float ledEnv = 0.0f;
 
 	// Plaits engines (Mutable Instruments, MIT)
@@ -174,5 +177,11 @@ private:
 		float subLevel = 0.3f;					// Sub pulse on each tap, tuned to the kick
 		float rumbleWidth = 0.4f;				// Rumble stereo width (mono sum unaffected)
 		float rumbleHp = 30.0f;					// Rumble high pass (Hz)
+
+		// Random zone at the top of the Decay pot: mostly normal lengths, a few long booms - more towards full CW
+		float randomZone = 0.10f;				// Fraction of the pot travel (0 = off)
+		float randomLongMin = 0.08f;			// Chance of a long hit where the zone starts ...
+		float randomLongMax = 0.6f;				// ... and at full CW
+		float randomBase = 0.5f;				// Length of the normal hits in the zone (0 - 1 like the pot)
 	} config;
 };

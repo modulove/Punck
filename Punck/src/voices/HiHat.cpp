@@ -3,6 +3,7 @@
 #include <cstring>
 #include <cmath>
 #include "Dynamics.h"
+#include "stmlib/utils/random.h"
 
 
 void HiHat::Play(const uint8_t voice, const uint32_t noteOffset, uint32_t noteRange, const float velocity, const float pitch)
@@ -20,14 +21,10 @@ void HiHat::Play(const uint8_t voice, const uint32_t noteOffset, uint32_t noteRa
 	lpFilter.Init();
 	lpFilterCutoff = config.lpInitCutoff;
 
-	// Decay pot: top of travel randomises decay per hit; below that the pot is rescaled so its full range is still available
-	float pot = static_cast<float>(ADC_array[ADC_HiHatDecay]) / 65536.0f;
-	if (pot > config.randomThreshold) {
-		const float r = static_cast<float>(RNG->DR & 0xFFFFFF) / 16777216.0f;
-		pot = dyn::FastExp2(config.randomSkew * dyn::FastLog2(std::max(r, 1e-6f)));	// r^skew: mostly closed, occasionally open
-	} else {
-		pot /= config.randomThreshold;
-	}
+	// Decay pot: the top zone randomises the decay per hit (mostly short, a few sustained - more towards full CW)
+	const float r1 = stmlib::Random::GetFloat(), r2 = stmlib::Random::GetFloat();
+	const float pot = RandomZone(static_cast<float>(ADC_array[ADC_HiHatDecay]) / 65536.0f, config.randomZone,
+			config.randomLongMin, config.randomLongMax, config.randomBase, r1, r2);
 
 	// Note index sets how open the hat is (higher MIDI notes / open trigger = more open); pot shifts by +/-0.5
 	noteRange = noteRange == 0 ? 128 : noteRange;
@@ -36,7 +33,7 @@ void HiHat::Play(const uint8_t voice, const uint32_t noteOffset, uint32_t noteRa
 
 	if (engine != classic) {
 		// Plaits hats: open amount (-0.41 closed .. 1.5 fully open) mapped onto Plaits decay
-		morph = std::clamp(0.25f + 0.5f * open, 0.0f, 1.0f);
+		morph = std::clamp(config.plaitsDecayBase + config.plaitsDecayScale * open, 0.0f, std::clamp(config.plaitsDecayMax, 0.0f, 1.0f));
 		f0 = std::min(config.pitch * pitch / systemSampleRate, 0.1f);
 		accent = std::clamp(velocity, 0.0f, 1.0f);
 		trigger = true;

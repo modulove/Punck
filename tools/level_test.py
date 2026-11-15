@@ -186,7 +186,7 @@ def loudness(path):
 # Tests
 # ------------------------------------------------------------------------------------------------
 def cmd_detect(a, p):
-    devs = list_devices()
+    devs = [a.device] if a.device else list_devices()
     print("Quiet 1 kHz test tone at -40 dB, recording each input with the tone on and off ...")
     best = None
     for d in devs:

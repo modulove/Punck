@@ -58,6 +58,25 @@ public:
 		}
 	}
 
+	// Random zone at the top of a pot's travel (kick and hat Decay): mostly normal hits around 'base' with a little
+	// variation, plus a few sustained ones - their chance rises from longMin where the zone starts to longMax at full
+	// CW. Below the zone the pot is rescaled so its whole range is still available. r1, r2: random 0 - 1.
+	static float RandomZone(const float pot, float zone, const float longMin, const float longMax, const float base,
+			const float r1, const float r2)
+	{
+		zone = std::clamp(zone, 0.0f, 0.5f);
+		if (zone <= 0.0f) {
+			return pot;
+		}
+		const float start = 1.0f - zone;
+		if (pot < start) {
+			return pot / start;
+		}
+		const float z = std::min((pot - start) / zone, 1.0f);
+		const float chance = longMin + (longMax - longMin) * z;
+		return (r1 < chance) ? 0.8f + 0.2f * r2 : std::clamp(base + 0.2f * (r2 - 0.5f), 0.0f, 1.0f);
+	}
+
 	constexpr float FreqToInc(const float frequency)
 	{
 		return frequency * (2 * pi) / systemSampleRate;

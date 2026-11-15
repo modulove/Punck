@@ -315,11 +315,58 @@ static void RenderGroove(const std::string& dir, const std::string& name, MixCon
 			100.0 * bus.clipped / std::max<uint64_t>(2 * bus.n, 1), (unsigned long long)st.nan);
 }
 
+// Hats and kick Decay pot incl. the random zone: length per hit (time until -40 dB below the hit's peak)
+template<class F> static void ZoneStats(const char* label, F setup, const float pot, const bool kick, const uint32_t engine,
+		const uint32_t offset, Wav* wav)
+{
+	Rig r;
+	if (kick) r.kick.SetEngine(engine); else r.hat.SetEngine(engine);
+	setup(r);
+	Pots(0.3f, kick ? pot : 0.5f, kick ? 0.3f : pot);
+	const uint32_t hitLen = systemSampleRate * (kick ? 3 : 2) / 2;
+	const uint32_t hits = 48;
+	uint32_t longHits = 0; double sumMs = 0.0, maxMs = 0.0, minMs = 1e9;
+	for (uint32_t h = 0; h < hits; ++h) {
+		if (kick) r.kick.Play(0, 0, 0, 1.0f, 1.0f); else r.hat.Play(0, offset, 3, 1.0f, 1.0f);
+		std::vector<float> env(hitLen);
+		float pk = 0.0f;
+		for (uint32_t s = 0; s < hitLen; ++s) {
+			float k[2], d[2];
+			Tick(r, k, d);
+			const float v = kick ? k[0] : d[0];
+			env[s] = std::abs(v); pk = std::max(pk, env[s]);
+			if (wav && h < 12) wav->Add(v, v);
+		}
+		uint32_t last = 0;
+		for (uint32_t s = 0; s < hitLen; ++s) if (env[s] > pk * 0.01f) last = s;
+		const double ms = 1000.0 * last / systemSampleRate;
+		sumMs += ms; maxMs = std::max(maxMs, ms); minMs = std::min(minMs, ms);
+		if (ms > (kick ? 700.0 : 250.0)) ++longHits;
+	}
+	printf("  %-26s pot %4.2f: length avg %6.0f ms  min %5.0f  max %5.0f   long hits %2u / %u\n", label, pot, sumMs / hits, minMs, maxMs, longHits, hits);
+}
+
+
 int main(int argc, char** argv)
 {
 	const std::string dir = argc > 1 ? argv[1] : ".";
+	{
+		Rig r;
+		printf("Config sizes (bytes): kick %u snare %u hats %u toms %u\n", (unsigned)r.kick.ConfigSize(), (unsigned)r.snare.ConfigSize(),
+				(unsigned)r.hat.ConfigSize(), (unsigned)r.toms.ConfigSize());
+	}
 	RenderKickEngines(dir);
 	RenderSnares(dir);
+
+	printf("\nHats 808 closed (note 42) / open (note 44), Decay pot incl. random zone (top 10 %%):\n");
+	auto none = [](Rig&) {};
+	Wav zoneWav;
+	for (float pot : {0.0f, 0.5f, 0.89f, 0.91f, 0.95f, 1.0f}) ZoneStats("808 closed", none, pot, false, 1, 0, pot == 1.0f ? &zoneWav : nullptr);
+	for (float pot : {0.0f, 0.5f, 0.89f}) ZoneStats("808 open", none, pot, false, 1, 2, nullptr);
+	for (float pot : {0.0f, 0.5f, 0.89f}) ZoneStats("classic closed", none, pot, false, 0, 0, nullptr);
+	printf("\nKick (deep) Decay pot incl. random zone:\n");
+	for (float pot : {0.3f, 0.89f, 0.91f, 0.95f, 1.0f}) ZoneStats("deep kick", none, pot, true, 1, 0, pot == 1.0f ? &zoneWav : nullptr);
+	zoneWav.Write(dir + "/random_zone_full_cw.wav");
 
 	printf("\nBass engine (toms slot) through the master bus:\n");
 	RenderBass(dir, "bass_psy_kbbb_142", 142.0f, 2.0f, 2, 0.15f, 46.25f, 110.0f);		// punch kick, F#1, rolling

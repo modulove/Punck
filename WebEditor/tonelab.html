@@ -79,8 +79,8 @@ input[type=range] { accent-color: var(--accent); width: 90px; }
     <div class="group">
       <label>MIDI map</label>
       <select id="selMap">
+        <option value="modulove" selected>modulove fw (ch 10, kick 36)</option>
         <option value="stock">Stock firmware (omni, kick 84)</option>
-        <option value="modulove">modulove fw (ch 10, kick 36)</option>
       </select>
     </div>
     <div class="padrow" id="padRow"></div>
@@ -102,11 +102,17 @@ input[type=range] { accent-color: var(--accent); width: 90px; }
 const CMD = { StartStop: 0x1A, GetVoiceConfig: 0x1D, SetVoiceConfig: 0x1E, SaveConfig: 0x21, GetReverbConfig: 0x22, SetReverbConfig: 0x23 };
 const SR = 48000, LN2 = Math.log(2), LN1000 = Math.log(0.001);
 
+// Field lists in struct order: [name, count, type] (type "b" = raw bytes, default float). The modulove firmware
+// appends fields; stock firmware has only the first ones. We always send back exactly as many bytes as the module reported.
 const STRUCTS = {
-  Kick:   { voice: 0, fields: [["ramp1Inc",1],["ramp2Inc",1],["ramp3Inc",1],["fastSinFreq",1],["initSlowSinFreq",1],["sineSlowDownRate",1]] },
-  Snare:  { voice: 1, fields: [["noiseInitLevel",1],["noiseDecay",1],["baseFreq",1],["basePos",1],["partialDecay",1],["partialInitLevel",3],["partialFreqOffset",3]] },
-  HiHat:  { voice: 2, fields: [["attackInc",1],["decay",1],["hpInitCutoff",1],["hpFinalCutoff",1],["hpCutoffInc",1],["lpInitCutoff",1],["lpFinalCutoff",1],["lpCutoffInc",1],["noiseInitLevel",1],["noiseDecay",1],["partialScale",6],["partialFreq",6]],
-            tail: [0, 8, 1, 6, 1, 0, 0, 0] },           // uint8 partialFM[6] + padding (kept from module when read)
+  Kick:   { voice: 0, fields: [["ramp1Inc",1],["ramp2Inc",1],["ramp3Inc",1],["fastSinFreq",1],["initSlowSinFreq",1],["sineSlowDownRate",1],
+            ["engine",1],["pitch",1],["tone",1],["fmRatio",1],["fmPitchEnv",1],["fmPitchDecay",1],["drive",1],["rumbleFeedback",1],["rumbleCutoff",1],
+            ["rumbleDrive",1],["rumbleDuck",1],["rumbleLevel",1],["rumblePunch",1],["tap2",1],["tap3",1],["tap4",1]] },
+  Snare:  { voice: 1, fields: [["noiseInitLevel",1],["noiseDecay",1],["baseFreq",1],["basePos",1],["partialDecay",1],["partialInitLevel",3],["partialFreqOffset",3],
+            ["engine",1],["pitch",1],["tone",1],["decayP",1],["rimDecay",1],["rimRatio",1]] },
+  HiHat:  { voice: 2, fields: [["attackInc",1],["decay",1],["hpInitCutoff",1],["hpFinalCutoff",1],["hpCutoffInc",1],["lpInitCutoff",1],["lpFinalCutoff",1],["lpCutoffInc",1],["noiseInitLevel",1],["noiseDecay",1],["partialScale",6],["partialFreq",6],
+            ["decayMin",1],["decayRange",1],["decayMax",1],["ringModLevel",1],["ringModOpenStart",1],["gritHold",1],["randomThreshold",1],["randomSkew",1],
+            ["partialFM",8,"b"],["engine",1],["pitch",1],["tone",1],["noisiness",1]] },
   Toms:   { voice: 5, fields: [["decaySpeed",2],["rampInc",1],["baseFreq",1],["sineFreqScale",2],["sineInitLevel",2],["sineSlowDownRate",1]] },
   Claps:  { voice: 6, fields: [["initLevel",1],["reverbInitLevel",1],["initDecay",1],["reverbDecay",1],["filterCutoff",1],["filterQ",1],["unfilteredNoiseLevel",1]] },
   Reverb: { voice: -1, fields: [["reverbLevel",1],["mixerBaseDelay",1],["diffuserCount",1],["mixerChannels",1],["filterCutoff",1]] },
@@ -146,6 +152,29 @@ const PRESETS = {
 };
 const FACTORY = PRESETS["Factory (upstream)"];
 
+// Defaults of the fields added by the modulove firmware (same as the firmware's Config structs)
+const NEWDEF = {
+  Kick: { engine: 1, pitch: 49, tone: 0.45, fmRatio: 1.41, fmPitchEnv: 3, fmPitchDecay: 22, drive: 0.25, rumbleFeedback: 0.86, rumbleCutoff: 140,
+          rumbleDrive: 0.6, rumbleDuck: 0.9, rumbleLevel: 1.4, rumblePunch: 0.3, tap2: 0.6, tap3: 0.4, tap4: 0.25 },
+  Snare: { engine: 1, pitch: 200, tone: 0.5, decayP: 0.35, rimDecay: 45, rimRatio: 2.17 },
+  HiHat: { decayMin: 0.998, decayRange: 0.0028, decayMax: 0.99985, ringModLevel: 0.6, ringModOpenStart: 0.35, gritHold: 3, randomThreshold: 0.96, randomSkew: 2,
+           partialFM: [0, 8, 1, 6, 1, 0, 0, 0], engine: 1, pitch: 400, tone: 0.6, noisiness: 0.35 },
+};
+for (const s in NEWDEF) FACTORY[s] = { ...NEWDEF[s], ...FACTORY[s] };
+// Engine choices on top of the existing presets
+Object.assign(PRESETS["Factory (upstream)"].Kick, { engine: 0 }); Object.assign(PRESETS["Factory (upstream)"].Snare, { engine: 0 }); Object.assign(PRESETS["Factory (upstream)"].HiHat, { engine: 0 });
+Object.assign(PRESETS["Deep techno"].Kick, { engine: 1, pitch: 46, tone: 0.42 });
+Object.assign(PRESETS["Deep techno"].Snare, { engine: 1, pitch: 190, tone: 0.5, decayP: 0.3 });
+Object.assign(PRESETS["Deep techno"].HiHat, { engine: 2, pitch: 420, tone: 0.65, noisiness: 0.45 });
+Object.assign(PRESETS["Dub techno"].Kick, { engine: 4, pitch: 45, tone: 0.35, rumbleFeedback: 0.9, rumbleCutoff: 120, rumbleDrive: 0.5, rumbleLevel: 1.6, tap2: 0.6, tap3: 0.45, tap4: 0.3 });
+Object.assign(PRESETS["Dub techno"].Snare, { engine: 3, pitch: 380, rimDecay: 55, rimRatio: 2.17 });
+Object.assign(PRESETS["Dub techno"].HiHat, { engine: 1, pitch: 380, tone: 0.5, noisiness: 0.3 });
+PRESETS["Hard techno (FM)"] = { ...JSON.parse(JSON.stringify(PRESETS["Deep techno"])) };
+Object.assign(PRESETS["Hard techno (FM)"].Kick, { engine: 3, pitch: 50, fmRatio: 1.41, fmPitchEnv: 4, fmPitchDecay: 18, drive: 0.55 });
+Object.assign(PRESETS["Hard techno (FM)"].Snare, { engine: 2, pitch: 210, tone: 0.6, decayP: 0.3 });
+const ENGINES = { Kick: ["Classic", "Deep (808)", "Punch (909)", "FM", "Rumble"], Snare: ["Classic", "Analog (808)", "Synthetic (909)", "Rim / clave"],
+                  HiHat: ["Classic metallic", "808 square noise", "909 ring mod"] };
+
 // ---------------------------------------------------------------------------------------------
 // Unit conversions: knobs work in musical units, the module stores per-sample coefficients
 // ---------------------------------------------------------------------------------------------
@@ -177,41 +206,72 @@ function fmt(v, unit) {
 
 // Control definitions per voice: [label, field, index, conv, unit, min, max, scale]
 const UI = {
-  Kick: { title: "Kick", hint: "Panel: Attack = low-pass on the kick (audible on the click), Decay = length, Level.", controls: [
-    ["Pitch", "initSlowSinFreq", 0, "lin", "Hzn", 30, 110, "log"],
-    ["Pitch drop", "sineSlowDownRate", 0, "drop", "oct/s", 0, 4, "lin"],
-    ["Click freq", "fastSinFreq", 0, "lin", "Hz", 60, 500, "log"],
-    ["Click rise", "ramp1Inc", 0, "lin", "", 0.05, 0.8, "lin"],
-    ["Click body", "ramp2Inc", 0, "lin", "", 0.005, 0.15, "log"],
-    ["Click snap", "ramp3Inc", 0, "lin", "", 0.05, 0.9, "lin"],
+  Kick: { title: "Kick", hints: ["Panel: Attack = low-pass (audible on the click), Decay = length.",
+      "Panel: Attack = punch → self-FM → drive, Decay = length.", "Panel: Attack = FM envelope / dirt, Decay = length.",
+      "Panel: Attack = FM depth (grit), Decay = length.", "Panel: Attack = RUMBLE amount, Decay = body length. Ghost taps follow MIDI clock / sequencer / kick interval."], controls: [
+    ["Pitch", "initSlowSinFreq", 0, "lin", "Hzn", 30, 110, "log", [0]],
+    ["Pitch drop", "sineSlowDownRate", 0, "drop", "oct/s", 0, 4, "lin", [0]],
+    ["Click freq", "fastSinFreq", 0, "lin", "Hz", 60, 500, "log", [0]],
+    ["Click rise", "ramp1Inc", 0, "lin", "", 0.05, 0.8, "lin", [0]],
+    ["Click body", "ramp2Inc", 0, "lin", "", 0.005, 0.15, "log", [0]],
+    ["Click snap", "ramp3Inc", 0, "lin", "", 0.05, 0.9, "lin", [0]],
+    ["Pitch", "pitch", 0, "lin", "Hzn", 30, 110, "log", [1, 2, 3, 4]],
+    ["Tone", "tone", 0, "lin", "", 0, 1, "lin", [1, 2, 4]],
+    ["FM ratio", "fmRatio", 0, "lin", "x", 0.5, 4, "log", [3]],
+    ["Pitch env", "fmPitchEnv", 0, "lin", "x", 0, 8, "lin", [3]],
+    ["Env time", "fmPitchDecay", 0, "lin", "ms", 2, 100, "log", [3]],
+    ["Drive", "drive", 0, "lin", "", 0, 1, "lin", [3, 4]],
+    ["Tail", "rumbleFeedback", 0, "lin", "", 0, 0.97, "lin", [4]],
+    ["Cutoff", "rumbleCutoff", 0, "lin", "Hz", 40, 400, "log", [4]],
+    ["Grit", "rumbleDrive", 0, "lin", "", 0, 1, "lin", [4]],
+    ["Duck", "rumbleDuck", 0, "lin", "", 0, 1, "lin", [4]],
+    ["Rumble lvl", "rumbleLevel", 0, "lin", "", 0, 3, "lin", [4]],
+    ["Body punch", "rumblePunch", 0, "lin", "", 0, 1, "lin", [4]],
+    ["Tap 2", "tap2", 0, "lin", "", 0, 1, "lin", [4]],
+    ["Tap 3", "tap3", 0, "lin", "", 0, 1, "lin", [4]],
+    ["Tap 4", "tap4", 0, "lin", "", 0, 1, "lin", [4]],
   ]},
-  Snare: { title: "Snare", hint: "Panel: Filter = low-pass, Tuning = ×0.5…1.5 of Tone. Higher MIDI notes / sequencer index = longer.", controls: [
-    ["Tone", "baseFreq", 0, "lin", "Hz", 80, 900, "log"],
-    ["Body decay", "partialDecay", 0, "decay", "ms", 10, 500, "log"],
-    ["Noise", "noiseInitLevel", 0, "lin", "", 0, 2, "lin"],
-    ["Noise decay", "noiseDecay", 0, "decay", "ms", 10, 800, "log"],
-    ["Click", "basePos", 0, "lin", "", 0, 3.14, "lin"],
-    ["Body 1", "partialInitLevel", 0, "lin", "", -1, 1, "lin"],
-    ["Body 2", "partialInitLevel", 1, "lin", "", -1, 1, "lin"],
-    ["Body 3", "partialInitLevel", 2, "lin", "", -1, 1, "lin"],
-    ["Ratio 2", "partialFreqOffset", 1, "lin", "x", 1, 5, "log"],
-    ["Ratio 3", "partialFreqOffset", 2, "lin", "x", 1, 6, "log"],
+  Snare: { title: "Snare", hints: ["Panel: Filter = low-pass, Tuning = ×0.5…1.5. Higher MIDI notes = longer.",
+      "Panel: Filter = snappy (noise), Tuning = pitch ×0.5…2. Higher notes / open trigger = longer.",
+      "Panel: Filter = snappy, Tuning = pitch ×0.5…2. Tone = FM amount.", "Panel: Filter = snap noise, Tuning = pitch ×0.5…2."], controls: [
+    ["Tone", "baseFreq", 0, "lin", "Hz", 80, 900, "log", [0]],
+    ["Body decay", "partialDecay", 0, "decay", "ms", 10, 500, "log", [0]],
+    ["Noise", "noiseInitLevel", 0, "lin", "", 0, 2, "lin", [0]],
+    ["Noise decay", "noiseDecay", 0, "decay", "ms", 10, 800, "log", [0]],
+    ["Click", "basePos", 0, "lin", "", 0, 3.14, "lin", [0]],
+    ["Body 1", "partialInitLevel", 0, "lin", "", -1, 1, "lin", [0]],
+    ["Body 2", "partialInitLevel", 1, "lin", "", -1, 1, "lin", [0]],
+    ["Body 3", "partialInitLevel", 2, "lin", "", -1, 1, "lin", [0]],
+    ["Ratio 2", "partialFreqOffset", 1, "lin", "x", 1, 5, "log", [0]],
+    ["Ratio 3", "partialFreqOffset", 2, "lin", "x", 1, 6, "log", [0]],
+    ["Pitch", "pitch", 0, "lin", "Hzn", 80, 700, "log", [1, 2, 3]],
+    ["Tone", "tone", 0, "lin", "", 0, 1, "lin", [1, 2]],
+    ["Decay", "decayP", 0, "lin", "", 0, 1, "lin", [1, 2, 3]],
+    ["Rim decay", "rimDecay", 0, "lin", "ms", 5, 200, "log", [3]],
+    ["Rim ratio", "rimRatio", 0, "lin", "x", 1.2, 4, "log", [3]],
   ]},
-  HiHat: { title: "Hats", hint: "Panel: Decay (closed ↔ open; notes/C-O inputs set openness), Level.", controls: [
-    ["Metal pitch", "_metalPitch", 0, "lin", "x", 0.4, 2.5, "log"],
-    ["Metal level", "_metalLevel", 0, "lin", "x", 0, 2, "lin"],
-    ["Noise", "noiseInitLevel", 0, "lin", "", 0, 3, "lin"],
-    ["Noise decay", "noiseDecay", 0, "decay", "ms", 5, 1500, "log"],
-    ["HP start", "hpInitCutoff", 0, "omega", "Hz", 300, 15000, "log"],
-    ["HP end", "hpFinalCutoff", 0, "omega", "Hz", 1000, 18000, "log"],
-    ["HP sweep", "hpCutoffInc", 0, "rise", "oct/s", 5, 1500, "log"],
-    ["LP start", "lpInitCutoff", 0, "omega", "Hz", 2000, 23500, "log"],
-    ["LP end", "lpFinalCutoff", 0, "omega", "Hz", 500, 20000, "log"],
-    ["LP close", "lpCutoffInc", 0, "drop", "oct/s", 0.1, 30, "log"],
-    ["Attack", "attackInc", 0, "attack", "ms", 0.05, 8, "log"],
+  HiHat: { title: "Hats", hints: ["Panel: Decay (closed ↔ open, top 4% = random), Level. Open hats get the ring-mod grit.",
+      "Panel: Decay (closed ↔ open, top 4% = random), Level.", "Panel: Decay (closed ↔ open, top 4% = random), Level."], controls: [
+    ["Metal pitch", "_metalPitch", 0, "lin", "x", 0.4, 2.5, "log", [0]],
+    ["Metal level", "_metalLevel", 0, "lin", "x", 0, 2, "lin", [0]],
+    ["Noise", "noiseInitLevel", 0, "lin", "", 0, 3, "lin", [0]],
+    ["Noise decay", "noiseDecay", 0, "decay", "ms", 5, 1500, "log", [0]],
+    ["HP start", "hpInitCutoff", 0, "omega", "Hz", 300, 15000, "log", [0]],
+    ["HP end", "hpFinalCutoff", 0, "omega", "Hz", 1000, 18000, "log", [0]],
+    ["HP sweep", "hpCutoffInc", 0, "rise", "oct/s", 5, 1500, "log", [0]],
+    ["LP start", "lpInitCutoff", 0, "omega", "Hz", 2000, 23500, "log", [0]],
+    ["LP end", "lpFinalCutoff", 0, "omega", "Hz", 500, 20000, "log", [0]],
+    ["LP close", "lpCutoffInc", 0, "drop", "oct/s", 0.1, 30, "log", [0]],
+    ["Attack", "attackInc", 0, "attack", "ms", 0.05, 8, "log", [0]],
+    ["Ring mod", "ringModLevel", 0, "lin", "", 0, 1.5, "lin", [0]],
+    ["Grit", "gritHold", 0, "lin", "int", 1, 8, "lin", [0]],
+    ["Pitch", "pitch", 0, "lin", "Hz", 100, 2000, "log", [1, 2]],
+    ["Tone", "tone", 0, "lin", "", 0, 1, "lin", [1, 2]],
+    ["Noisiness", "noisiness", 0, "lin", "", 0, 1, "lin", [1, 2]],
+    ["Rnd skew", "randomSkew", 0, "lin", "", 0.5, 4, "lin"],
   ], advanced: [0, 1, 2, 3, 4, 5].flatMap(i => [
-    [`P${i + 1} freq`, "partialFreq", i, "lin", "Hz", 100, 12000, "log"],
-    [`P${i + 1} level`, "partialScale", i, "lin", "", 0, 1.5, "lin"],
+    [`P${i + 1} freq`, "partialFreq", i, "lin", "Hz", 100, 12000, "log", [0]],
+    [`P${i + 1} level`, "partialScale", i, "lin", "", 0, 1.5, "lin", [0]],
   ])},
   Toms: { title: "Toms", hint: "MIDI/sequencer only. Stock fw plays both partials at Pitch × Ratio 2.", controls: [
     ["Pitch", "baseFreq", 0, "lin", "Hz", 30, 300, "log"],
@@ -244,14 +304,14 @@ const METAL_BASE_FREQ = FACTORY.HiHat.partialFreq, METAL_BASE_LEVEL = FACTORY.Hi
 // ---------------------------------------------------------------------------------------------
 // State
 // ---------------------------------------------------------------------------------------------
-const state = {}, tails = {}, knobs = [], locks = {};
+const state = {}, tails = {}, knobs = [], locks = {}, rawLen = {};
 let midiOut = null, midiIn = null, pending = null;
 const undoStack = [];
 const snap = { A: null, B: null };
 
 function clone(o) { return JSON.parse(JSON.stringify(o)); }
 function loadValues(src) { for (const s in STRUCTS) if (src[s]) for (const k in src[s]) state[s][k] = clone(src[s][k]); }
-for (const s in STRUCTS) { state[s] = clone(FACTORY[s]); tails[s] = STRUCTS[s].tail ? STRUCTS[s].tail.slice() : []; }
+for (const s in STRUCTS) { state[s] = clone(FACTORY[s]); tails[s] = []; }
 if (state.HiHat.decay === undefined) state.HiHat.decay = 0.9991;
 
 function log(msg) { const el = document.getElementById("log"); el.textContent += new Date().toLocaleTimeString() + "  " + msg + "\n"; el.scrollTop = el.scrollHeight; }
@@ -259,28 +319,41 @@ function log(msg) { const el = document.getElementById("log"); el.textContent +=
 // ---------------------------------------------------------------------------------------------
 // Encoding
 // ---------------------------------------------------------------------------------------------
+function structSize(s) { return STRUCTS[s].fields.reduce((a, [, n, t]) => a + (t === "b" ? n : 4 * n), 0); }
 function encodeStruct(s) {
-  const def = STRUCTS[s], floats = [];
-  for (const [name, n] of def.fields) {
+  const def = STRUCTS[s], full = structSize(s);
+  const buf = new Uint8Array(full + tails[s].length), dv = new DataView(buf.buffer);
+  let pos = 0;
+  for (const [name, n, t] of def.fields) {
     const v = state[s][name];
-    if (n === 1) floats.push(+v); else for (let i = 0; i < n; i++) floats.push(+v[i]);
+    for (let i = 0; i < n; i++) {
+      const x = n === 1 ? v : v[i];
+      if (t === "b") buf[pos++] = (+x) & 0xFF; else { dv.setFloat32(pos, +x, true); pos += 4; }
+    }
   }
-  const buf = new Uint8Array(floats.length * 4 + tails[s].length);
-  const dv = new DataView(buf.buffer);
-  floats.forEach((f, i) => dv.setFloat32(i * 4, f, true));
-  buf.set(tails[s], floats.length * 4);
-  return buf;
+  buf.set(tails[s], pos);
+  // Never send more than the module's struct holds (stock firmware ignores oversize blocks)
+  return rawLen[s] ? buf.slice(0, rawLen[s]) : buf;
 }
 function decodeStruct(s, bytes) {
   const def = STRUCTS[s], dv = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  rawLen[s] = bytes.length;
   let pos = 0;
-  for (const [name, n] of def.fields) {
-    if (pos + 4 * n > bytes.length) return;
-    if (n === 1) state[s][name] = dv.getFloat32(pos, true);
-    else state[s][name] = Array.from({ length: n }, (_, i) => dv.getFloat32(pos + 4 * i, true));
-    pos += 4 * n;
+  for (const [name, n, t] of def.fields) {
+    const size = t === "b" ? n : 4 * n;
+    if (pos + size > bytes.length) { tails[s] = []; return; }
+    const vals = Array.from({ length: n }, (_, i) => t === "b" ? bytes[pos + i] : dv.getFloat32(pos + 4 * i, true));
+    state[s][name] = n === 1 ? vals[0] : vals;
+    pos += size;
   }
   tails[s] = Array.from(bytes.slice(pos));
+}
+function hasField(s, field) {
+  // True if the connected module's struct contains this field (always true before the first read)
+  if (!rawLen[s]) return true;
+  let pos = 0;
+  for (const [name, n, t] of STRUCTS[s].fields) { const size = t === "b" ? n : 4 * n; if (name === field) return pos + size <= rawLen[s]; pos += size; }
+  return true;
 }
 function nibbles(bytes) { const out = []; for (const b of bytes) out.push(b & 0x0F, b >> 4); return out; }
 function unnibble(arr) { const out = new Uint8Array(arr.length >> 1); for (let i = 0; i < out.length; i++) out[i] = (arr[2 * i] & 0x0F) | ((arr[2 * i + 1] & 0x0F) << 4); return out; }
@@ -364,13 +437,13 @@ function polar(cx, cy, r, a) { const t = (a - 90) * Math.PI / 180; return [cx + 
 function arc(cx, cy, r, a0, a1) { const [x0, y0] = polar(cx, cy, r, a0), [x1, y1] = polar(cx, cy, r, a1); return `M${x0},${y0} A${r},${r} 0 ${a1 - a0 > 180 ? 1 : 0} 1 ${x1},${y1}`; }
 
 function makeKnob(parent, voice, def) {
-  const [label, field, idx, conv, unit, min, max, scale] = def;
+  const [label, field, idx, conv, unit, min, max, scale, eng] = def;
   const el = document.createElement("div"); el.className = "knob";
   el.innerHTML = `<svg viewBox="0 0 54 54"><path class="bg" d="${arc(27, 27, 21, A0, A1)}" stroke="var(--knob)" stroke-width="5" fill="none" stroke-linecap="round"/>
     <path class="fg" stroke="var(--accent)" stroke-width="5" fill="none" stroke-linecap="round"/><line class="ptr" x1="27" y1="27" x2="27" y2="10" stroke="var(--text)" stroke-width="2" stroke-linecap="round"/></svg>
     <div class="val"></div><div class="lbl">${label}</div>`;
   parent.appendChild(el);
-  const k = { el, voice, field, idx, conv: CONV[conv], unit, min, max, scale, label };
+  const k = { el, voice, field, idx, conv: CONV[conv], unit, min, max, scale, label, eng };
   k.norm = v => scale === "log" ? Math.log(Math.max(v, min) / min) / Math.log(max / min) : (v - min) / (max - min);
   k.denorm = t => { t = Math.min(1, Math.max(0, t)); return scale === "log" ? min * Math.pow(max / min, t) : min + t * (max - min); };
   k.value = () => k.conv.fromRaw(getRaw(voice, field, idx));
@@ -404,7 +477,24 @@ function makeKnob(parent, voice, def) {
   svg.title = "Drag up/down (Shift = fine), wheel, double-click = factory";
   knobs.push(k); k.draw(); return k;
 }
-function refreshKnobs(voice) { for (const k of knobs) if (!voice || k.voice === voice) k.draw(); }
+const sections = {};
+function engineOf(s) { return Math.round(state[s].engine || 0); }
+function updateVisibility(s) {
+  const e = hasField(s, "engine") ? engineOf(s) : 0;
+  for (const k of knobs) if (k.voice === s) {
+    const show = (!k.eng || k.eng.includes(e)) && (k.field.startsWith("_") || hasField(s, k.field));
+    k.el.style.display = show ? "" : "none";
+  }
+  const sec = sections[s]; if (!sec) return;
+  const sel = sec.querySelector(".engine");
+  if (sel) { sel.value = e; sel.style.display = hasField(s, "engine") ? "" : "none"; }
+  if (UI[s].hints) sec.querySelector(".hint").textContent = UI[s].hints[e] || UI[s].hints[0];
+  const det = sec.querySelector("details"); if (det) det.style.display = e === 0 ? "" : "none";
+}
+function refreshKnobs(voice) {
+  for (const k of knobs) if (!voice || k.voice === voice) k.draw();
+  for (const s in sections) if (!voice || s === voice) updateVisibility(s);
+}
 
 // ---------------------------------------------------------------------------------------------
 // Undo / snapshots / randomise
@@ -415,6 +505,7 @@ function restore(snapObj) { loadValues(snapObj); refreshKnobs(); sendAll(); }
 function randomise(voice, amount, wild) {
   for (const k of knobs) {
     if (k.voice !== voice || locks[voice]) continue;
+    if (k.el.style.display === "none") continue;                                   // only knobs of the current engine
     if (k.el.closest("details") && !k.el.closest("details").open) continue;     // leave hidden advanced knobs alone
     const t = k.norm(k.value());
     const nt = wild ? Math.random() * 0.8 + 0.1 : t + (Math.random() * 2 - 1) * amount;
@@ -430,11 +521,15 @@ const main = document.getElementById("main"), padsEl = document.getElementById("
 for (const s of ["Kick", "Snare", "HiHat", "Toms", "Claps", "Reverb"]) {
   const u = UI[s];
   const sec = document.createElement("section"); sec.className = "voice";
-  sec.innerHTML = `<div class="head"><h2>${u.title}</h2>
+  const engSel = ENGINES[s] ? `<select class="engine small" title="Sound engine (same as long press on the voice button)">${ENGINES[s].map((n, i) => `<option value="${i}">${i + 1} ${n}</option>`).join("")}</select>` : "";
+  sec.innerHTML = `<div class="head"><h2>${u.title}</h2>${engSel}
     <button class="small dice" title="Randomise around current values">Dice</button>
     <button class="small wild" title="Completely random (within musical range)">Wild</button>
-    <button class="small lock" title="Exclude from Dice all / Mutate">Lock</button></div><p class="hint">${u.hint}</p><div class="knobs"></div>`;
+    <button class="small lock" title="Exclude from Dice all / Mutate">Lock</button></div><p class="hint">${u.hint || u.hints[0]}</p><div class="knobs"></div>`;
   main.insertBefore(sec, padsEl);
+  sections[s] = sec;
+  const es = sec.querySelector(".engine");
+  if (es) es.onchange = () => { pushUndo(); state[s].engine = +es.value; sendStruct(s); refreshKnobs(s); log(`${u.title}: engine ${ENGINES[s][+es.value]}`); };
   const kd = sec.querySelector(".knobs");
   u.controls.forEach(c => makeKnob(kd, s, c));
   if (u.advanced) {
@@ -447,6 +542,8 @@ for (const s of ["Kick", "Snare", "HiHat", "Toms", "Claps", "Reverb"]) {
   const lockBtn = sec.querySelector(".lock");
   lockBtn.onclick = () => { locks[s] = !locks[s]; lockBtn.classList.toggle("on", locks[s]); };
 }
+
+refreshKnobs();
 
 // Header actions
 const sel = document.getElementById("selPreset");

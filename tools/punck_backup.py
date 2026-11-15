@@ -308,6 +308,104 @@ def do_restore(args):
         p.close()
 
 
+# ---------------------------------------------------------------------------------------------
+# Live voice editing: values take effect immediately, only persist after SaveConfig (--save)
+# ---------------------------------------------------------------------------------------------
+EDITABLE = {"kick": "Kick", "snare": "Snare", "hihat": "HiHat", "hats": "HiHat", "toms": "Toms",
+            "claps": "Claps", "clap": "Claps", "reverb": "Reverb"}
+
+
+def encode_struct(name, fields, raw):
+    """Pack field dict back into the struct layout, keeping any trailing bytes (padding / unknown fields)."""
+    out, pos = bytearray(), 0
+    for field, fmt in LAYOUT[name]:
+        size = struct.calcsize("<" + fmt)
+        if pos + size > len(raw):
+            break
+        val = fields[field]
+        vals = val if isinstance(val, list) else [val]
+        out += struct.pack("<" + fmt, *[int(v) if fmt.endswith("B") else float(v) for v in vals])
+        pos += size
+    return bytes(out) + raw[pos:]
+
+
+def read_cfg(p, name):
+    return p.reverb_config() if name == "Reverb" else p.voice_config(VOICES.index(name))
+
+
+def write_cfg(p, name, raw):
+    if name == "Reverb":
+        p.send([CMD["SetReverbConfig"]] + nibble_encode(raw))
+    else:
+        p.send([CMD["SetVoiceConfig"], VOICES.index(name)] + nibble_encode(raw))
+
+
+def apply_changes(p, changes):
+    """changes: {StructName: {field or field[i]: value}}"""
+    for name, upd in changes.items():
+        raw = read_cfg(p, name)
+        fields = decode_struct(name, raw)
+        for key, val in upd.items():
+            if "[" in key:
+                base, idx = key[:-1].split("[")
+                fields[base][int(idx)] = val
+            elif key not in fields:
+                raise SystemExit(f"{name} has no field '{key}'. Fields: {list(fields)}")
+            else:
+                fields[key] = val
+        write_cfg(p, name, encode_struct(name, fields, raw))
+        print(f"  {name}: " + ", ".join(f"{k}={v}" for k, v in upd.items()))
+
+
+def do_show(args):
+    p = Punck(args.port)
+    try:
+        for name in ["Kick", "Snare", "HiHat", "Toms", "Claps", "Reverb"]:
+            print(f"{name}:")
+            for k, v in decode_struct(name, read_cfg(p, name)).items():
+                print(f"    {k:18s} {v}")
+    finally:
+        p.close()
+
+
+def finish(p, save):
+    if save:
+        p.send([CMD["SaveConfig"], 0])
+        time.sleep(1.0)
+        print("Saved to internal flash.")
+    else:
+        print("Live only (not saved) - power cycle reverts. Run again with --save to keep.")
+
+
+def do_set(args):
+    changes = {}
+    for a in args.assign:
+        lhs, val = a.split("=", 1)
+        voice, field = lhs.split(".", 1)
+        name = EDITABLE.get(voice.lower())
+        if not name:
+            raise SystemExit(f"Unknown voice '{voice}' (use {sorted(set(EDITABLE))})")
+        changes.setdefault(name, {})[field] = json.loads(val)
+    p = Punck(args.port)
+    try:
+        apply_changes(p, changes)
+        finish(p, args.save)
+    finally:
+        p.close()
+
+
+def do_preset(args):
+    preset = json.load(open(args.file, encoding="utf-8"))
+    changes = {EDITABLE.get(k.lower(), k): v for k, v in preset.items() if not k.startswith("_")}
+    p = Punck(args.port)
+    try:
+        print(f"Preset {os.path.basename(args.file)}: {preset.get('_description', '')}")
+        apply_changes(p, changes)
+        finish(p, args.save)
+    finally:
+        p.close()
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--port", default="Mountjoy Punck", help="MIDI port name substring")
@@ -318,8 +416,23 @@ def main():
     r = sub.add_parser("restore")
     r.add_argument("src", help="backup folder")
     r.add_argument("--save", action="store_true", help="commit to internal flash afterwards")
+    sub.add_parser("show", help="print current voice + reverb settings")
+    s = sub.add_parser("set", help="set values live, e.g. kick.initSlowSinFreq=52 'snare.partialInitLevel[1]=0.4'")
+    s.add_argument("assign", nargs="+")
+    s.add_argument("--save", action="store_true")
+    pr = sub.add_parser("preset", help="apply a preset JSON live")
+    pr.add_argument("file")
+    pr.add_argument("--save", action="store_true")
+    sv = sub.add_parser("save", help="commit current live settings to internal flash")
     args = ap.parse_args()
-    do_backup(args) if args.cmd == "backup" else do_restore(args)
+    if args.cmd == "save":
+        p = Punck(args.port)
+        try:
+            finish(p, True)
+        finally:
+            p.close()
+        return
+    {"backup": do_backup, "restore": do_restore, "show": do_show, "set": do_set, "preset": do_preset}[args.cmd](args)
 
 
 if __name__ == "__main__":

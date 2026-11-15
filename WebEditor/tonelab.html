@@ -1,0 +1,540 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Punck Tone Lab</title>
+<style>
+:root {
+  --bg: #15171a; --panel: #1e2126; --panel2: #262a30; --line: #343a42; --text: #e6e8eb; --dim: #8b929b;
+  --accent: #f0a23a; --accent2: #5fb8e8; --ok: #6cc070; --bad: #e0665e; --knob: #3a4049;
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--text); font: 13px/1.35 system-ui, -apple-system, "Segoe UI", sans-serif; }
+header { position: sticky; top: 0; z-index: 5; background: #111316; border-bottom: 1px solid var(--line); padding: 8px 16px; display: flex; flex-wrap: wrap; gap: 8px 14px; align-items: center; }
+h1 { font-size: 16px; margin: 0 8px 0 0; letter-spacing: .5px; }
+h1 span { color: var(--accent); }
+button, select, input[type=file]::file-selector-button { background: var(--panel2); color: var(--text); border: 1px solid var(--line); border-radius: 6px; padding: 5px 10px; font: inherit; cursor: pointer; }
+button:hover, select:hover { border-color: var(--accent); }
+button.primary { background: var(--accent); color: #1a1a1a; border-color: var(--accent); font-weight: 600; }
+button.small { padding: 2px 7px; font-size: 12px; }
+button.on { background: var(--accent2); color: #111; border-color: var(--accent2); }
+.status { padding: 3px 8px; border-radius: 10px; font-size: 12px; background: #3a2626; color: var(--bad); }
+.status.ok { background: #233626; color: var(--ok); }
+.group { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+.group label { color: var(--dim); font-size: 12px; }
+main { padding: 12px 16px 40px; display: grid; gap: 12px; grid-template-columns: repeat(auto-fill, minmax(330px, 1fr)); }
+section.voice { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px 12px; }
+section.voice > .head { display: flex; align-items: center; gap: 6px; margin-bottom: 6px; }
+section.voice > .head h2 { font-size: 14px; margin: 0; flex: 1; }
+section.voice > .head h2 small { color: var(--dim); font-weight: normal; font-size: 11px; margin-left: 6px; }
+.hint { color: var(--dim); font-size: 11px; margin: 0 0 6px; }
+.knobs { display: grid; grid-template-columns: repeat(auto-fill, minmax(74px, 1fr)); gap: 8px 4px; }
+.knob { display: flex; flex-direction: column; align-items: center; user-select: none; touch-action: none; }
+.knob svg { width: 54px; height: 54px; cursor: ns-resize; }
+.knob .lbl { font-size: 11px; color: var(--dim); text-align: center; line-height: 1.1; min-height: 24px; }
+.knob .val { font-size: 11px; font-variant-numeric: tabular-nums; color: var(--text); }
+.knob.changed .lbl { color: var(--accent); }
+details { margin-top: 8px; }
+details summary { color: var(--dim); cursor: pointer; font-size: 12px; }
+#pads { grid-column: 1 / -1; background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; display: flex; flex-wrap: wrap; gap: 8px 16px; align-items: center; }
+#pads .padrow { display: flex; flex-wrap: wrap; gap: 6px; }
+#pads .pad { min-width: 64px; padding: 10px 8px; font-weight: 600; }
+#pads .pad:active, #pads .pad.hit { background: var(--accent); color: #111; }
+#log { grid-column: 1 / -1; background: #0f1113; border: 1px solid var(--line); border-radius: 8px; padding: 6px 10px; color: var(--dim); font: 11px/1.4 ui-monospace, Consolas, monospace; max-height: 90px; overflow: auto; white-space: pre-wrap; }
+input[type=range] { accent-color: var(--accent); width: 90px; }
+.kbd { color: var(--dim); font-size: 10px; display: block; font-weight: normal; }
+</style>
+</head>
+<body>
+<header>
+  <h1>PUNCK <span>Tone Lab</span></h1>
+  <span id="status" class="status">not connected</span>
+  <div class="group">
+    <button id="btnConnect" class="primary">Connect</button>
+    <button id="btnRead" title="Read current settings from the module">Read</button>
+    <button id="btnSave" title="Write current settings to the module's internal flash (survives power off)">Save to Punck</button>
+  </div>
+  <div class="group">
+    <label>Preset</label>
+    <select id="selPreset"></select>
+    <button id="btnLoadPreset">Load</button>
+    <button id="btnExport" title="Download current settings as JSON (also works with tools/punck_backup.py preset)">Export</button>
+    <label class="small"><input type="file" id="fileImport" accept=".json" style="width:170px"></label>
+  </div>
+  <div class="group">
+    <button id="btnUndo" title="Undo (Ctrl+Z)">Undo</button>
+    <button id="btnStoreA" class="small">Store A</button><button id="btnA" class="small">A</button>
+    <button id="btnStoreB" class="small">Store B</button><button id="btnB" class="small">B</button>
+  </div>
+  <div class="group">
+    <label>Random</label><input type="range" id="rndAmount" min="5" max="100" value="35">
+    <button id="btnRandAll" title="Randomise all unlocked voices">Dice all</button>
+    <button id="btnMutate" title="Small random changes on all unlocked voices">Mutate</button>
+  </div>
+</header>
+
+<main id="main">
+  <div id="pads">
+    <div class="group">
+      <label>MIDI map</label>
+      <select id="selMap">
+        <option value="stock">Stock firmware (omni, kick 84)</option>
+        <option value="modulove">modulove fw (ch 10, kick 36)</option>
+      </select>
+    </div>
+    <div class="padrow" id="padRow"></div>
+    <div class="group">
+      <button id="btnLoop">Loop</button>
+      <select id="selPattern"></select>
+      <label>BPM</label><input type="range" id="bpm" min="80" max="150" value="124"><span id="bpmVal">124</span>
+      <label>Swing</label><input type="range" id="swing" min="0" max="60" value="0"><span id="swingVal">0%</span>
+    </div>
+  </div>
+  <div id="log"></div>
+</main>
+
+<script>
+"use strict";
+// ---------------------------------------------------------------------------------------------
+// Protocol (Punck/src/usb/MidiHandler.cpp) and config struct layouts (Punck/src/voices/*.h)
+// ---------------------------------------------------------------------------------------------
+const CMD = { StartStop: 0x1A, GetVoiceConfig: 0x1D, SetVoiceConfig: 0x1E, SaveConfig: 0x21, GetReverbConfig: 0x22, SetReverbConfig: 0x23 };
+const SR = 48000, LN2 = Math.log(2), LN1000 = Math.log(0.001);
+
+const STRUCTS = {
+  Kick:   { voice: 0, fields: [["ramp1Inc",1],["ramp2Inc",1],["ramp3Inc",1],["fastSinFreq",1],["initSlowSinFreq",1],["sineSlowDownRate",1]] },
+  Snare:  { voice: 1, fields: [["noiseInitLevel",1],["noiseDecay",1],["baseFreq",1],["basePos",1],["partialDecay",1],["partialInitLevel",3],["partialFreqOffset",3]] },
+  HiHat:  { voice: 2, fields: [["attackInc",1],["decay",1],["hpInitCutoff",1],["hpFinalCutoff",1],["hpCutoffInc",1],["lpInitCutoff",1],["lpFinalCutoff",1],["lpCutoffInc",1],["noiseInitLevel",1],["noiseDecay",1],["partialScale",6],["partialFreq",6]],
+            tail: [0, 8, 1, 6, 1, 0, 0, 0] },           // uint8 partialFM[6] + padding (kept from module when read)
+  Toms:   { voice: 5, fields: [["decaySpeed",2],["rampInc",1],["baseFreq",1],["sineFreqScale",2],["sineInitLevel",2],["sineSlowDownRate",1]] },
+  Claps:  { voice: 6, fields: [["initLevel",1],["reverbInitLevel",1],["initDecay",1],["reverbDecay",1],["filterCutoff",1],["filterQ",1],["unfilteredNoiseLevel",1]] },
+  Reverb: { voice: -1, fields: [["reverbLevel",1],["mixerBaseDelay",1],["diffuserCount",1],["mixerChannels",1],["filterCutoff",1]] },
+};
+
+// ---------------------------------------------------------------------------------------------
+// Presets (same format as tools/presets/*.json)
+// ---------------------------------------------------------------------------------------------
+const PRESETS = {
+  "Factory (upstream)": {
+    Kick: { ramp1Inc: 0.22, ramp2Inc: 0.015, ramp3Inc: 0.3, fastSinFreq: 130, initSlowSinFreq: 60, sineSlowDownRate: 0.999985 },
+    Snare: { noiseInitLevel: 1.0, noiseDecay: 0.9982, baseFreq: 150, basePos: 0.5, partialDecay: 0.9982, partialInitLevel: [0.7, 0.5, -0.4], partialFreqOffset: [1.0, 1.588, 1.833] },
+    HiHat: { attackInc: 0.005, decay: 0.9991, hpInitCutoff: 0.07, hpFinalCutoff: 0.27, hpCutoffInc: 1.01, lpInitCutoff: 0.5, lpFinalCutoff: 0.1, lpCutoffInc: 0.99998, noiseInitLevel: 0.99, noiseDecay: 0.9998,
+             partialScale: [0.8, 0.5, 0.4, 0.4, 0.5, 0.4], partialFreq: [569, 621, 1559, 2056, 3300, 5515] },
+    Toms: { decaySpeed: [0.9995, 0.9993], rampInc: 0.2, baseFreq: 60, sineFreqScale: [1.0, 1.588], sineInitLevel: [1.0, 0.0], sineSlowDownRate: 0.99995 },
+    Claps: { initLevel: 5, reverbInitLevel: 4, initDecay: 0.993, reverbDecay: 0.999, filterCutoff: 1250, filterQ: 3, unfilteredNoiseLevel: 0.06 },
+    Reverb: { reverbLevel: 0.01, mixerBaseDelay: 75, diffuserCount: 2, mixerChannels: 8, filterCutoff: 2400 },
+  },
+  "Deep techno": {
+    Kick: { ramp1Inc: 0.4, ramp2Inc: 0.035, ramp3Inc: 0.5, fastSinFreq: 230, initSlowSinFreq: 46, sineSlowDownRate: 0.999995 },
+    Snare: { noiseInitLevel: 1.0, noiseDecay: 0.9975, baseFreq: 185, basePos: 0.5, partialDecay: 0.9955, partialInitLevel: [0.55, 0.35, -0.2], partialFreqOffset: [1.0, 1.588, 2.13] },
+    HiHat: { attackInc: 0.04, hpInitCutoff: 0.12, hpFinalCutoff: 0.34, hpCutoffInc: 1.01, lpInitCutoff: 0.85, lpFinalCutoff: 0.3, lpCutoffInc: 0.9999, noiseInitLevel: 1.4, noiseDecay: 0.999,
+             partialScale: [0.55, 0.35, 0.28, 0.28, 0.35, 0.28], partialFreq: [683, 745, 1871, 2467, 3960, 6618] },
+    Toms: { decaySpeed: [0.9992, 0.999], rampInc: 0.3, baseFreq: 70, sineFreqScale: [1.0, 1.588], sineInitLevel: [1.0, 0.0], sineSlowDownRate: 0.99996 },
+    Claps: { initLevel: 5, reverbInitLevel: 3.5, initDecay: 0.9925, reverbDecay: 0.9993, filterCutoff: 1300, filterQ: 2, unfilteredNoiseLevel: 0.04 },
+    Reverb: { reverbLevel: 0.006, mixerBaseDelay: 70, diffuserCount: 3, mixerChannels: 8, filterCutoff: 3000 },
+  },
+  "Dub techno": {
+    Kick: { ramp1Inc: 0.22, ramp2Inc: 0.02, ramp3Inc: 0.3, fastSinFreq: 140, initSlowSinFreq: 50, sineSlowDownRate: 0.999994 },
+    Snare: { noiseInitLevel: 0.12, noiseDecay: 0.99, baseFreq: 380, basePos: 1.2, partialDecay: 0.995, partialInitLevel: [0.8, 0.45, 0.25], partialFreqOffset: [1.0, 2.2, 3.7] },
+    HiHat: { attackInc: 0.02, hpInitCutoff: 0.10, hpFinalCutoff: 0.28, hpCutoffInc: 1.01, lpInitCutoff: 0.60, lpFinalCutoff: 0.15, lpCutoffInc: 0.99998, noiseInitLevel: 1.0, noiseDecay: 0.9997,
+             partialScale: [0.8, 0.5, 0.4, 0.4, 0.5, 0.4], partialFreq: [569, 621, 1559, 2056, 3300, 5515] },
+    Toms: { decaySpeed: [0.9992, 0.999], rampInc: 0.3, baseFreq: 70, sineFreqScale: [1.0, 1.588], sineInitLevel: [1.0, 0.0], sineSlowDownRate: 0.99992 },
+    Claps: { initLevel: 5, reverbInitLevel: 3, initDecay: 0.9925, reverbDecay: 0.9995, filterCutoff: 1150, filterQ: 2.2, unfilteredNoiseLevel: 0.03 },
+    Reverb: { reverbLevel: 0.012, mixerBaseDelay: 110, diffuserCount: 3, mixerChannels: 8, filterCutoff: 2200 },
+  },
+};
+const FACTORY = PRESETS["Factory (upstream)"];
+
+// ---------------------------------------------------------------------------------------------
+// Unit conversions: knobs work in musical units, the module stores per-sample coefficients
+// ---------------------------------------------------------------------------------------------
+const CONV = {
+  lin:    { toRaw: v => v, fromRaw: r => r },
+  omega:  { toRaw: v => v / (SR / 2), fromRaw: r => r * (SR / 2) },                       // Hz <-> fraction of Nyquist
+  decay:  { toRaw: v => Math.exp(LN1000 / (SR * v / 1000)), fromRaw: r => r >= 1 ? 99999 : LN1000 / Math.log(r) / SR * 1000 },   // ms to -60 dB
+  drop:   { toRaw: v => Math.exp(-v * LN2 / SR), fromRaw: r => -SR * Math.log(r) / LN2 },  // octaves per second downward
+  rise:   { toRaw: v => Math.exp(v * LN2 / SR), fromRaw: r => SR * Math.log(r) / LN2 },    // octaves per second upward
+  attack: { toRaw: v => 1 / (SR / 1000 * v), fromRaw: r => 1 / (SR / 1000 * r) },        // ms for envelope to reach full level
+  pct:    { toRaw: v => v / 100, fromRaw: r => r * 100 },
+  chans:  { toRaw: v => [0, 4, 8][Math.round(v)], fromRaw: r => r >= 8 ? 2 : r >= 4 ? 1 : 0 },
+};
+const NOTE_NAMES = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"];
+function noteName(hz) { const n = Math.round(12 * Math.log2(hz / 440) + 69); return NOTE_NAMES[(n + 120) % 12] + (Math.floor(n / 12) - 1); }
+function fmt(v, unit) {
+  switch (unit) {
+    case "Hz": return (v >= 1000 ? (v / 1000).toFixed(v >= 10000 ? 1 : 2) + "k" : v.toFixed(v < 100 ? 1 : 0)) + " Hz";
+    case "Hzn": return v.toFixed(1) + " Hz " + noteName(v);
+    case "ms": return (v >= 1000 ? (v / 1000).toFixed(2) + " s" : v.toFixed(v < 10 ? 1 : 0) + " ms");
+    case "oct/s": return v.toFixed(v < 10 ? 2 : 0) + " oct/s";
+    case "%": return v.toFixed(2) + " %";
+    case "x": return "×" + v.toFixed(2);
+    case "int": return Math.round(v).toString();
+    case "chans": return ["0", "4", "8"][Math.round(v)] + " ch";
+    default: return v.toFixed(Math.abs(v) < 1 ? 3 : 2);
+  }
+}
+
+// Control definitions per voice: [label, field, index, conv, unit, min, max, scale]
+const UI = {
+  Kick: { title: "Kick", hint: "Panel: Attack = low-pass on the kick (audible on the click), Decay = length, Level.", controls: [
+    ["Pitch", "initSlowSinFreq", 0, "lin", "Hzn", 30, 110, "log"],
+    ["Pitch drop", "sineSlowDownRate", 0, "drop", "oct/s", 0, 4, "lin"],
+    ["Click freq", "fastSinFreq", 0, "lin", "Hz", 60, 500, "log"],
+    ["Click rise", "ramp1Inc", 0, "lin", "", 0.05, 0.8, "lin"],
+    ["Click body", "ramp2Inc", 0, "lin", "", 0.005, 0.15, "log"],
+    ["Click snap", "ramp3Inc", 0, "lin", "", 0.05, 0.9, "lin"],
+  ]},
+  Snare: { title: "Snare", hint: "Panel: Filter = low-pass, Tuning = ×0.5…1.5 of Tone. Higher MIDI notes / sequencer index = longer.", controls: [
+    ["Tone", "baseFreq", 0, "lin", "Hz", 80, 900, "log"],
+    ["Body decay", "partialDecay", 0, "decay", "ms", 10, 500, "log"],
+    ["Noise", "noiseInitLevel", 0, "lin", "", 0, 2, "lin"],
+    ["Noise decay", "noiseDecay", 0, "decay", "ms", 10, 800, "log"],
+    ["Click", "basePos", 0, "lin", "", 0, 3.14, "lin"],
+    ["Body 1", "partialInitLevel", 0, "lin", "", -1, 1, "lin"],
+    ["Body 2", "partialInitLevel", 1, "lin", "", -1, 1, "lin"],
+    ["Body 3", "partialInitLevel", 2, "lin", "", -1, 1, "lin"],
+    ["Ratio 2", "partialFreqOffset", 1, "lin", "x", 1, 5, "log"],
+    ["Ratio 3", "partialFreqOffset", 2, "lin", "x", 1, 6, "log"],
+  ]},
+  HiHat: { title: "Hats", hint: "Panel: Decay (closed ↔ open; notes/C-O inputs set openness), Level.", controls: [
+    ["Metal pitch", "_metalPitch", 0, "lin", "x", 0.4, 2.5, "log"],
+    ["Metal level", "_metalLevel", 0, "lin", "x", 0, 2, "lin"],
+    ["Noise", "noiseInitLevel", 0, "lin", "", 0, 3, "lin"],
+    ["Noise decay", "noiseDecay", 0, "decay", "ms", 5, 1500, "log"],
+    ["HP start", "hpInitCutoff", 0, "omega", "Hz", 300, 15000, "log"],
+    ["HP end", "hpFinalCutoff", 0, "omega", "Hz", 1000, 18000, "log"],
+    ["HP sweep", "hpCutoffInc", 0, "rise", "oct/s", 5, 1500, "log"],
+    ["LP start", "lpInitCutoff", 0, "omega", "Hz", 2000, 23500, "log"],
+    ["LP end", "lpFinalCutoff", 0, "omega", "Hz", 500, 20000, "log"],
+    ["LP close", "lpCutoffInc", 0, "drop", "oct/s", 0.1, 30, "log"],
+    ["Attack", "attackInc", 0, "attack", "ms", 0.05, 8, "log"],
+  ], advanced: [0, 1, 2, 3, 4, 5].flatMap(i => [
+    [`P${i + 1} freq`, "partialFreq", i, "lin", "Hz", 100, 12000, "log"],
+    [`P${i + 1} level`, "partialScale", i, "lin", "", 0, 1.5, "lin"],
+  ])},
+  Toms: { title: "Toms", hint: "MIDI/sequencer only. Stock fw plays both partials at Pitch × Ratio 2.", controls: [
+    ["Pitch", "baseFreq", 0, "lin", "Hz", 30, 300, "log"],
+    ["Ratio 2", "sineFreqScale", 1, "lin", "x", 0.5, 3, "log"],
+    ["Decay", "decaySpeed", 0, "decay", "ms", 20, 2000, "log"],
+    ["Decay 2", "decaySpeed", 1, "decay", "ms", 20, 2000, "log"],
+    ["Pitch drop", "sineSlowDownRate", 0, "drop", "oct/s", 0, 8, "lin"],
+    ["Attack", "rampInc", 0, "lin", "", 0.05, 0.9, "lin"],
+    ["Level 2", "sineInitLevel", 1, "lin", "", 0, 1, "lin"],
+  ]},
+  Claps: { title: "Clap", hint: "MIDI/sequencer only. Band-passed noise: 3 hits + tail.", controls: [
+    ["Filter", "filterCutoff", 0, "lin", "Hz", 300, 6000, "log"],
+    ["Q", "filterQ", 0, "lin", "", 0.5, 10, "log"],
+    ["Hits", "initLevel", 0, "lin", "", 0, 10, "lin"],
+    ["Tail", "reverbInitLevel", 0, "lin", "", 0, 10, "lin"],
+    ["Hit decay", "initDecay", 0, "decay", "ms", 5, 200, "log"],
+    ["Tail decay", "reverbDecay", 0, "decay", "ms", 20, 1500, "log"],
+    ["Raw noise", "unfilteredNoiseLevel", 0, "lin", "", 0, 0.3, "lin"],
+  ]},
+  Reverb: { title: "Reverb", hint: "Whole mix (stock fw sends the kick too - keep it low for techno).", controls: [
+    ["Level", "reverbLevel", 0, "pct", "%", 0, 5, "lin"],
+    ["Size", "mixerBaseDelay", 0, "lin", "int", 20, 150, "lin"],
+    ["Diffusion", "diffuserCount", 0, "lin", "int", 0, 3, "lin"],
+    ["Channels", "mixerChannels", 0, "chans", "chans", 0, 2, "lin"],
+    ["Tone", "filterCutoff", 0, "lin", "Hz", 300, 12000, "log"],
+  ]},
+};
+const METAL_BASE_FREQ = FACTORY.HiHat.partialFreq, METAL_BASE_LEVEL = FACTORY.HiHat.partialScale;
+
+// ---------------------------------------------------------------------------------------------
+// State
+// ---------------------------------------------------------------------------------------------
+const state = {}, tails = {}, knobs = [], locks = {};
+let midiOut = null, midiIn = null, pending = null;
+const undoStack = [];
+const snap = { A: null, B: null };
+
+function clone(o) { return JSON.parse(JSON.stringify(o)); }
+function loadValues(src) { for (const s in STRUCTS) if (src[s]) for (const k in src[s]) state[s][k] = clone(src[s][k]); }
+for (const s in STRUCTS) { state[s] = clone(FACTORY[s]); tails[s] = STRUCTS[s].tail ? STRUCTS[s].tail.slice() : []; }
+if (state.HiHat.decay === undefined) state.HiHat.decay = 0.9991;
+
+function log(msg) { const el = document.getElementById("log"); el.textContent += new Date().toLocaleTimeString() + "  " + msg + "\n"; el.scrollTop = el.scrollHeight; }
+
+// ---------------------------------------------------------------------------------------------
+// Encoding
+// ---------------------------------------------------------------------------------------------
+function encodeStruct(s) {
+  const def = STRUCTS[s], floats = [];
+  for (const [name, n] of def.fields) {
+    const v = state[s][name];
+    if (n === 1) floats.push(+v); else for (let i = 0; i < n; i++) floats.push(+v[i]);
+  }
+  const buf = new Uint8Array(floats.length * 4 + tails[s].length);
+  const dv = new DataView(buf.buffer);
+  floats.forEach((f, i) => dv.setFloat32(i * 4, f, true));
+  buf.set(tails[s], floats.length * 4);
+  return buf;
+}
+function decodeStruct(s, bytes) {
+  const def = STRUCTS[s], dv = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  let pos = 0;
+  for (const [name, n] of def.fields) {
+    if (pos + 4 * n > bytes.length) return;
+    if (n === 1) state[s][name] = dv.getFloat32(pos, true);
+    else state[s][name] = Array.from({ length: n }, (_, i) => dv.getFloat32(pos + 4 * i, true));
+    pos += 4 * n;
+  }
+  tails[s] = Array.from(bytes.slice(pos));
+}
+function nibbles(bytes) { const out = []; for (const b of bytes) out.push(b & 0x0F, b >> 4); return out; }
+function unnibble(arr) { const out = new Uint8Array(arr.length >> 1); for (let i = 0; i < out.length; i++) out[i] = (arr[2 * i] & 0x0F) | ((arr[2 * i + 1] & 0x0F) << 4); return out; }
+
+function sendStruct(s) {
+  if (!midiOut) return;
+  const payload = nibbles(encodeStruct(s));
+  const msg = s === "Reverb" ? [0xF0, CMD.SetReverbConfig, ...payload, 0xF7] : [0xF0, CMD.SetVoiceConfig, STRUCTS[s].voice, ...payload, 0xF7];
+  midiOut.send(msg);
+}
+const sendTimers = {};
+function queueSend(s) { clearTimeout(sendTimers[s]); sendTimers[s] = setTimeout(() => sendStruct(s), 25); }
+function sendAll() { for (const s in STRUCTS) sendStruct(s); }
+
+// ---------------------------------------------------------------------------------------------
+// MIDI
+// ---------------------------------------------------------------------------------------------
+async function connect() {
+  if (!navigator.requestMIDIAccess) { log("This browser has no Web MIDI - use Chrome or Edge."); return; }
+  try {
+    const access = await navigator.requestMIDIAccess({ sysex: true });
+    midiOut = [...access.outputs.values()].find(o => /punck/i.test(o.name)) || null;
+    midiIn = [...access.inputs.values()].find(i => /punck/i.test(i.name)) || null;
+    access.onstatechange = () => updateStatus();
+    if (midiIn) midiIn.onmidimessage = onMidi;
+    updateStatus();
+    if (midiOut) { log("Connected to " + midiOut.name); await readAll(); }
+    else log("Punck MIDI port not found. Close other programs using it (old web editor, punck_backup.py) and reconnect.");
+  } catch (e) { log("MIDI access failed: " + e); }
+}
+function updateStatus() {
+  const el = document.getElementById("status");
+  const ok = midiOut && midiOut.state === "connected";
+  el.textContent = ok ? "connected" : "not connected"; el.className = "status" + (ok ? " ok" : "");
+}
+function onMidi(ev) {
+  const d = ev.data;
+  if (d[0] !== 0xF0 || !pending) return;
+  if (d[1] === CMD.GetVoiceConfig && pending.type === "voice" && d[2] === pending.voice) pending.resolve(unnibble(d.slice(3, d.length - 1)));
+  else if (d[1] === CMD.GetReverbConfig && pending.type === "reverb") pending.resolve(unnibble(d.slice(2, d.length - 1)));
+}
+function request(msg, type, voice) {
+  return new Promise((resolve, reject) => {
+    const t = setTimeout(() => { pending = null; reject(new Error("timeout")); }, 1500);
+    pending = { type, voice, resolve: v => { clearTimeout(t); pending = null; resolve(v); } };
+    midiOut.send(msg);
+  });
+}
+async function readAll() {
+  if (!midiOut) return log("Not connected");
+  try {
+    for (const s in STRUCTS) {
+      const bytes = s === "Reverb" ? await request([0xF0, CMD.GetReverbConfig, 0, 0xF7], "reverb")
+                                   : await request([0xF0, CMD.GetVoiceConfig, STRUCTS[s].voice, 0xF7], "voice", STRUCTS[s].voice);
+      decodeStruct(s, bytes);
+    }
+    refreshKnobs(); log("Read settings from Punck");
+  } catch (e) { log("Read failed (" + e.message + ") - is the module running and the port free?"); }
+}
+
+// ---------------------------------------------------------------------------------------------
+// Value access incl. hi-hat macros
+// ---------------------------------------------------------------------------------------------
+function getRaw(s, field, idx) {
+  if (field === "_metalPitch") return state.HiHat.partialFreq[0] / METAL_BASE_FREQ[0];
+  if (field === "_metalLevel") return state.HiHat.partialScale[0] / METAL_BASE_LEVEL[0];
+  const v = state[s][field];
+  return Array.isArray(v) ? v[idx] : v;
+}
+function setRaw(s, field, idx, raw) {
+  if (field === "_metalPitch") { state.HiHat.partialFreq = METAL_BASE_FREQ.map(f => +(f * raw).toFixed(1)); return; }
+  if (field === "_metalLevel") { state.HiHat.partialScale = METAL_BASE_LEVEL.map(l => +(l * raw).toFixed(4)); return; }
+  if (Array.isArray(state[s][field])) state[s][field][idx] = raw; else state[s][field] = raw;
+}
+
+// ---------------------------------------------------------------------------------------------
+// Knob widget
+// ---------------------------------------------------------------------------------------------
+const A0 = -135, A1 = 135;
+function polar(cx, cy, r, a) { const t = (a - 90) * Math.PI / 180; return [cx + r * Math.cos(t), cy + r * Math.sin(t)]; }
+function arc(cx, cy, r, a0, a1) { const [x0, y0] = polar(cx, cy, r, a0), [x1, y1] = polar(cx, cy, r, a1); return `M${x0},${y0} A${r},${r} 0 ${a1 - a0 > 180 ? 1 : 0} 1 ${x1},${y1}`; }
+
+function makeKnob(parent, voice, def) {
+  const [label, field, idx, conv, unit, min, max, scale] = def;
+  const el = document.createElement("div"); el.className = "knob";
+  el.innerHTML = `<svg viewBox="0 0 54 54"><path class="bg" d="${arc(27, 27, 21, A0, A1)}" stroke="var(--knob)" stroke-width="5" fill="none" stroke-linecap="round"/>
+    <path class="fg" stroke="var(--accent)" stroke-width="5" fill="none" stroke-linecap="round"/><line class="ptr" x1="27" y1="27" x2="27" y2="10" stroke="var(--text)" stroke-width="2" stroke-linecap="round"/></svg>
+    <div class="val"></div><div class="lbl">${label}</div>`;
+  parent.appendChild(el);
+  const k = { el, voice, field, idx, conv: CONV[conv], unit, min, max, scale, label };
+  k.norm = v => scale === "log" ? Math.log(Math.max(v, min) / min) / Math.log(max / min) : (v - min) / (max - min);
+  k.denorm = t => { t = Math.min(1, Math.max(0, t)); return scale === "log" ? min * Math.pow(max / min, t) : min + t * (max - min); };
+  k.value = () => k.conv.fromRaw(getRaw(voice, field, idx));
+  k.set = (v, send = true) => {
+    v = Math.min(max, Math.max(min, v));
+    if (unit === "int" || conv === "chans") v = Math.round(v);
+    setRaw(voice, field, idx, k.conv.toRaw(v));
+    if (send) queueSend(voice);
+    refreshKnobs(voice);
+  };
+  k.draw = () => {
+    const v = k.value(), t = Math.min(1, Math.max(0, k.norm(v))), a = A0 + t * (A1 - A0);
+    el.querySelector(".fg").setAttribute("d", t > 0.002 ? arc(27, 27, 21, A0, a) : "");
+    const [x, y] = polar(27, 27, 17, a); const p = el.querySelector(".ptr"); p.setAttribute("x2", x); p.setAttribute("y2", y);
+    el.querySelector(".val").textContent = fmt(v, unit);
+    const f = FACTORY[voice] && (field.startsWith("_") ? 1 : (Array.isArray(FACTORY[voice][field]) ? FACTORY[voice][field][idx] : FACTORY[voice][field]));
+    const fv = field.startsWith("_") ? 1 : (f === undefined ? v : k.conv.fromRaw(f));
+    el.classList.toggle("changed", Math.abs(k.norm(fv) - t) > 0.01);
+  };
+  const svg = el.querySelector("svg");
+  let startY = 0, startT = 0;
+  svg.addEventListener("pointerdown", e => { pushUndo(); svg.setPointerCapture(e.pointerId); startY = e.clientY; startT = k.norm(k.value()); });
+  svg.addEventListener("pointermove", e => { if (!svg.hasPointerCapture(e.pointerId)) return; const sens = e.shiftKey ? 2000 : 200; k.set(k.denorm(startT + (startY - e.clientY) / sens)); });
+  svg.addEventListener("wheel", e => { e.preventDefault(); pushUndo(); k.set(k.denorm(k.norm(k.value()) - Math.sign(e.deltaY) * (e.shiftKey ? 0.005 : 0.03))); }, { passive: false });
+  svg.addEventListener("dblclick", () => {
+    pushUndo();
+    if (field.startsWith("_")) k.set(1);
+    else { const f = FACTORY[voice][field]; k.set(k.conv.fromRaw(Array.isArray(f) ? f[idx] : f)); }
+    log(`${voice} ${label} reset to factory`);
+  });
+  svg.title = "Drag up/down (Shift = fine), wheel, double-click = factory";
+  knobs.push(k); k.draw(); return k;
+}
+function refreshKnobs(voice) { for (const k of knobs) if (!voice || k.voice === voice) k.draw(); }
+
+// ---------------------------------------------------------------------------------------------
+// Undo / snapshots / randomise
+// ---------------------------------------------------------------------------------------------
+function snapshot() { const o = {}; for (const s in STRUCTS) o[s] = clone(state[s]); return o; }
+function pushUndo() { undoStack.push(snapshot()); if (undoStack.length > 100) undoStack.shift(); }
+function restore(snapObj) { loadValues(snapObj); refreshKnobs(); sendAll(); }
+function randomise(voice, amount, wild) {
+  for (const k of knobs) {
+    if (k.voice !== voice || locks[voice]) continue;
+    if (k.el.closest("details") && !k.el.closest("details").open) continue;     // leave hidden advanced knobs alone
+    const t = k.norm(k.value());
+    const nt = wild ? Math.random() * 0.8 + 0.1 : t + (Math.random() * 2 - 1) * amount;
+    k.set(k.denorm(nt), false);
+  }
+  queueSend(voice); refreshKnobs(voice);
+}
+
+// ---------------------------------------------------------------------------------------------
+// Build UI
+// ---------------------------------------------------------------------------------------------
+const main = document.getElementById("main"), padsEl = document.getElementById("pads");
+for (const s of ["Kick", "Snare", "HiHat", "Toms", "Claps", "Reverb"]) {
+  const u = UI[s];
+  const sec = document.createElement("section"); sec.className = "voice";
+  sec.innerHTML = `<div class="head"><h2>${u.title}</h2>
+    <button class="small dice" title="Randomise around current values">Dice</button>
+    <button class="small wild" title="Completely random (within musical range)">Wild</button>
+    <button class="small lock" title="Exclude from Dice all / Mutate">Lock</button></div><p class="hint">${u.hint}</p><div class="knobs"></div>`;
+  main.insertBefore(sec, padsEl);
+  const kd = sec.querySelector(".knobs");
+  u.controls.forEach(c => makeKnob(kd, s, c));
+  if (u.advanced) {
+    const det = document.createElement("details"); det.innerHTML = "<summary>Individual partials (overrides Metal macros)</summary><div class='knobs'></div>";
+    sec.appendChild(det); u.advanced.forEach(c => makeKnob(det.querySelector(".knobs"), s, c));
+  }
+  const amt = () => document.getElementById("rndAmount").value / 100 * 0.5;
+  sec.querySelector(".dice").onclick = () => { pushUndo(); randomise(s, amt(), false); log(`${u.title}: dice`); };
+  sec.querySelector(".wild").onclick = () => { pushUndo(); randomise(s, 0, true); log(`${u.title}: wild`); };
+  const lockBtn = sec.querySelector(".lock");
+  lockBtn.onclick = () => { locks[s] = !locks[s]; lockBtn.classList.toggle("on", locks[s]); };
+}
+
+// Header actions
+const sel = document.getElementById("selPreset");
+function fillPresets() { sel.innerHTML = Object.keys(PRESETS).map(n => `<option>${n}</option>`).join(""); }
+fillPresets(); sel.value = "Deep techno";
+document.getElementById("btnConnect").onclick = connect;
+document.getElementById("btnRead").onclick = readAll;
+document.getElementById("btnSave").onclick = () => {
+  if (!midiOut) return log("Not connected");
+  if (!confirm("Write the current settings to the Punck's internal flash? (survives power off)")) return;
+  sendAll(); setTimeout(() => { midiOut.send([0xF0, CMD.SaveConfig, 0, 0xF7]); log("Saved to Punck flash"); }, 200);
+};
+document.getElementById("btnLoadPreset").onclick = () => { pushUndo(); loadValues(PRESETS[sel.value]); refreshKnobs(); sendAll(); log("Preset: " + sel.value); };
+document.getElementById("btnUndo").onclick = () => { if (undoStack.length) { restore(undoStack.pop()); log("Undo"); } };
+document.addEventListener("keydown", e => { if ((e.ctrlKey || e.metaKey) && e.key === "z") { e.preventDefault(); document.getElementById("btnUndo").click(); } });
+for (const ab of ["A", "B"]) {
+  document.getElementById("btnStore" + ab).onclick = () => { snap[ab] = snapshot(); log("Stored " + ab); };
+  document.getElementById("btn" + ab).onclick = () => { if (snap[ab]) { pushUndo(); restore(snap[ab]); log("Recalled " + ab); } else log(ab + " is empty"); };
+}
+document.getElementById("btnRandAll").onclick = () => { pushUndo(); for (const s of ["Kick", "Snare", "HiHat", "Toms", "Claps"]) randomise(s, document.getElementById("rndAmount").value / 100 * 0.5, false); log("Dice all"); };
+document.getElementById("btnMutate").onclick = () => { pushUndo(); for (const s of ["Kick", "Snare", "HiHat", "Toms", "Claps"]) randomise(s, 0.06, false); log("Mutate"); };
+document.getElementById("btnExport").onclick = () => {
+  const o = { _description: "Exported from Punck Tone Lab " + new Date().toISOString().slice(0, 16), ...snapshot() };
+  const a = document.createElement("a"); a.href = URL.createObjectURL(new Blob([JSON.stringify(o, null, 2)], { type: "application/json" }));
+  a.download = "punck_preset_" + new Date().toISOString().slice(0, 16).replace(/[:T]/g, "-") + ".json"; a.click();
+};
+document.getElementById("fileImport").onchange = async e => {
+  const f = e.target.files[0]; if (!f) return;
+  try {
+    const o = JSON.parse(await f.text()); const name = f.name.replace(/\.json$/i, "");
+    PRESETS[name] = { Kick: o.Kick, Snare: o.Snare, HiHat: o.HiHat || o.Hats, Toms: o.Toms, Claps: o.Claps, Reverb: o.Reverb };
+    fillPresets(); sel.value = name; pushUndo(); loadValues(PRESETS[name]); refreshKnobs(); sendAll(); log("Imported " + f.name);
+  } catch (err) { log("Import failed: " + err); }
+};
+
+// ---------------------------------------------------------------------------------------------
+// Pads + groove loop (MIDI notes into the Punck)
+// ---------------------------------------------------------------------------------------------
+const MAPS = {
+  stock:    { ch: 0, kick: 84, snare: 72, snareL: 77, hatC: 78, hatO: 82, tomL: 56, tomH: 59, clap: 83, smpA: 48, smpB: 60 },
+  modulove: { ch: 9, kick: 36, snare: 37, snareL: 38, hatC: 42, hatO: 44, tomL: 40, tomH: 41, clap: 39, smpA: 45, smpB: 48 },
+};
+const PADS = [["kick", "Kick", "Z"], ["snare", "Snare", "X"], ["snareL", "Snare long", "C"], ["hatC", "Hat closed", "V"], ["hatO", "Hat open", "B"],
+              ["tomL", "Tom low", "N"], ["tomH", "Tom high", "M"], ["clap", "Clap", ","], ["smpA", "Sample A", "."], ["smpB", "Sample B", "/"]];
+const padRow = document.getElementById("padRow");
+function map() { return MAPS[document.getElementById("selMap").value]; }
+function note(key, vel = 110, when = performance.now()) {
+  if (!midiOut) return;
+  const m = map(), n = m[key];
+  midiOut.send([0x90 | m.ch, n, vel], when);
+  midiOut.send([0x80 | m.ch, n, 0], when + 40);
+}
+for (const [key, label, kb] of PADS) {
+  const b = document.createElement("button"); b.className = "pad"; b.innerHTML = `${label}<span class="kbd">${kb}</span>`;
+  b.onpointerdown = () => note(key); padRow.appendChild(b);
+  document.addEventListener("keydown", e => { if (!e.repeat && !e.ctrlKey && e.key.toUpperCase() === kb && e.target.tagName !== "INPUT") { note(key); b.classList.add("hit"); setTimeout(() => b.classList.remove("hit"), 90); } });
+}
+
+// Patterns: one char per 16th, '.' = rest, 1-9 = velocity
+const PATTERNS = {
+  "Techno 4/4":  { kick: "9...9...9...9...", hatC: "3.6.3.6.3.6.3.6.", hatO: "..7...7...7...7.", clap: "....6.......6...", tomL: "..........4....." },
+  "Hypnotic":    { kick: "9...9...9...9...", hatC: "4646464646464646", hatO: "......6.......6.", tomL: "..5.......5..4..", tomH: ".....4.........4", snare: "...........3...." },
+  "Dub techno":  { kick: "9...9...9...9...", hatO: "..6...6...6...6.", snare: "......6.......5.", hatC: "....2.......2..." },
+  "House":       { kick: "9...9...9...9...", clap: "....8.......8...", hatO: "..7...7...7...7.", hatC: "3.3.3.3.3.3.3.3." },
+  "Broken":      { kick: "9.....7...9.....", snare: "....8.......8...", hatC: "5.35.35.5.35.35.", tomH: "...........4..4." },
+};
+const selPat = document.getElementById("selPattern");
+selPat.innerHTML = Object.keys(PATTERNS).map(n => `<option>${n}</option>`).join("");
+let looping = false, step = 0, nextTime = 0, timer = null;
+function schedule() {
+  const bpm = +document.getElementById("bpm").value, swing = +document.getElementById("swing").value / 100;
+  const stepLen = 60000 / bpm / 4, pat = PATTERNS[selPat.value];
+  while (nextTime < performance.now() + 120) {
+    const t = nextTime + (step % 2 ? swing * stepLen * 0.66 : 0);
+    for (const voice in pat) { const c = pat[voice][step]; if (c && c !== ".") note(voice, Math.round(+c / 9 * 127), t); }
+    nextTime += stepLen; step = (step + 1) % 16;
+  }
+}
+document.getElementById("btnLoop").onclick = e => {
+  looping = !looping; e.target.classList.toggle("on", looping); e.target.textContent = looping ? "Stop" : "Loop";
+  if (looping) { if (!midiOut) log("Not connected - loop has no output"); step = 0; nextTime = performance.now() + 50; timer = setInterval(schedule, 25); }
+  else clearInterval(timer);
+};
+for (const [id, out, suf] of [["bpm", "bpmVal", ""], ["swing", "swingVal", "%"]]) {
+  const el = document.getElementById(id); el.oninput = () => document.getElementById(out).textContent = el.value + suf;
+}
+
+log("Tone Lab ready. Click Connect (Chrome/Edge, allow MIDI + SysEx). Knobs: drag up/down, Shift = fine, wheel, double-click = factory.");
+</script>
+</body>
+</html>

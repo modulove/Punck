@@ -30,3 +30,4 @@ Punck/Debug/makefile
 
 # headless build output
 build/
+__pycache__/

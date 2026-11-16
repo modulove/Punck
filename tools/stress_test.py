@@ -15,7 +15,7 @@ that is the intended worst case):
   rolls      every voice rolling at its own rate (20-60 hits/s), random velocity
   flams      bursts of 2-4 hits 1-4 ms apart on every voice (retrigger while ringing)
   chromatic  pitch channels with random notes over the full MIDI range 0-127, random velocity 1-127
-  flood      MIDI as fast as USB takes it, random voices and notes
+  flood      500 MIDI notes per second, random voices and notes
   switching  unison groove plus random engine switches and console hits every 150-400 ms
   sparse     single quiet hits: idle states, stuck voices, autosave in the background
 
@@ -156,6 +156,9 @@ class Module:
         self.sx = pb.Punck(midi_hint)                             # opens the MIDI in and out port (exclusive on Windows)
 
     def cmd(self, c, wait=0.5, tries=3):
+        """Console command. A write timeout keeps the port open (reopening sends control requests, which a busy
+        module can answer too late); only a vanished port (module restart) is reopened."""
+        import serial
         for _ in range(tries):
             try:
                 if self.con is None:
@@ -163,7 +166,10 @@ class Module:
                 if wait > 0:
                     self.con.s.reset_input_buffer()                   # drop late replies of earlier commands
                 return self.con.cmd(c, wait=wait)
-            except Exception as e:                                    # USB gone (restart, enumeration): reconnect
+            except serial.SerialTimeoutException as e:                # module busy: wait, keep the handle
+                self.log(f"console write timeout on '{c}'")
+                time.sleep(1.0)
+            except Exception as e:                                    # port gone (restart, re-enumeration): reopen
                 self.log(f"console error on '{c}': {type(e).__name__} {e}")
                 try:
                     if self.con:
@@ -171,7 +177,7 @@ class Module:
                 except Exception:
                     pass
                 self.con = None
-                time.sleep(1.0)
+                time.sleep(2.0)
         return None
 
     def reopen_midi(self):
@@ -292,12 +298,24 @@ def take_snapshot(mod, tl, path):
     return snap
 
 
+def set_mix(mod, values):
+    """Writes only the mix values that differ from the module's: every 'mix:i,v' makes it print its whole table,
+    and dozens of those in a row kept the console (and USB) busy for many seconds."""
+    cur = mod.read_mix()
+    written = 0
+    for i, v in sorted((int(k), float(x)) for k, x in values.items()):
+        if i in cur and abs(cur[i] - v) < 0.006:
+            continue
+        mod.cmd(f"mix:{i},{v:.5f}", wait=0.4)
+        written += 1
+    return written
+
+
 def restore_snapshot(mod, snap, log):
     for name, hexraw in snap["structs"].items():
         mod.write_struct(name, bytes.fromhex(hexraw))             # also restores the engine stored in each config
         time.sleep(0.1)
-    for i, v in sorted((int(k), v) for k, v in snap["mix"].items()):
-        mod.cmd(f"mix:{i},{v:.5f}", wait=0.12)
+    set_mix(mod, snap["mix"])
     log(f"settings restored from snapshot ({len(snap['structs'])} configs, {len(snap['mix'])} mix values)")
 
 
@@ -314,8 +332,7 @@ def randomise(mod, tl, rng, combo, snap, mismatch):
                 struct.pack_into("<f", raw, off, float(combo[STRUCT_ENGINE[name]] - 1))    # keep this combination's engine
             mod.write_struct(name, bytes(raw))
             time.sleep(0.05)
-        for i, v in snap["mix"].items():
-            mod.cmd(f"mix:{int(i)},{v:.5f}", wait=0.1)
+        set_mix(mod, snap["mix"])
         return mode, chosen
     extreme = mode == "extreme"
     for name in list(VOICE_STRUCTS) + ["Reverb"]:
@@ -339,7 +356,7 @@ def randomise(mod, tl, rng, combo, snap, mismatch):
             mod.write_struct(name, bytes(raw))
             chosen[name] = vals
             time.sleep(0.05)
-    mixvals = {}
+    mixvals, mixraw = {}, {}
     for c in tl.controls.get("Mix", []):
         if rng.random() > 0.4:
             continue
@@ -347,8 +364,10 @@ def randomise(mod, tl, rng, combo, snap, mismatch):
         if i is None:
             continue
         v = tl.pick(rng, c, extreme)
-        mod.cmd(f"mix:{i},{tl.to_raw(c['conv'], v):.5f}", wait=0.1)
+        mixraw[i] = tl.to_raw(c["conv"], v)
         mixvals[f"{c['field']}[{c['idx']}]"] = v
+    if mixraw:
+        set_mix(mod, mixraw)
     if mixvals:
         chosen["Mix"] = mixvals
     return mode, chosen
@@ -417,7 +436,7 @@ def gen_events(name, secs, rng):
                 ev.append((t, note(DRUM_CH, drum_note(rng, rng.choice(VOICES)), rng.randint(1, 127))))
             else:
                 ev.append((t, note(rng.choice(PITCH_CH), rng.randint(0, 127), rng.randint(1, 127))))
-            t += 0.0007
+            t += 0.002                                                # 500 notes/s: far above any controller
     elif name == "sparse":
         t = 0.3
         while t < secs:

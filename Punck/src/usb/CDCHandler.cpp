@@ -211,8 +211,8 @@ void CDCHandler::ProcessCommand()
 		voiceManager.GetMeter(m);
 		printf("CPU avg: %.1f%%  max: %.1f%%  underruns: %lu  uptime: %lu s  crashes: %lu\r\n", m.cpuAvg, m.cpuMax, i2sUnderrun,
 				SysTickVal / 1000, crashRecord.count);
-		printf("Audio rate: %lu/s (48000)  I2S restarts: %lu%s\r\n", audioRate, i2sRestarts,
-				i2sRestarts ? "  <- rate watchdog fired" : "");
+		printf("Audio rate: %lu/s (48000)  I2S restarts: %lu%s  USB EP0 aborts: %lu\r\n", audioRate, i2sRestarts,
+				i2sRestarts ? "  <- rate watchdog fired" : "", usb->ep0Aborts);
 		if (i2sRestarts) {
 			printf("Last bad rate: %lu/s\r\n", lastBadRate);
 		}

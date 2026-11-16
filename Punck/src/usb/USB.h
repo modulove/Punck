@@ -65,6 +65,7 @@ public:
 	CDCHandler  cdc  = CDCHandler(this,  USB::CDC_In,  USB::CDC_Out,  CDCCmdInterface);
 	bool classPendingData = false;			// Set when class setup command received and data pending
 	DeviceState devState;
+	uint32_t ep0Aborts = 0;					// modulove: control transfers abandoned by the host and cleared (AbortEP0In)
 
 private:
 	enum class EP0State {Idle, Setup, DataIn, DataOut, StatusIn, StatusOut, Stall};
@@ -87,6 +88,7 @@ private:
 	void StdDevReq();
 	void EPStartXfer(const Direction direction, uint8_t endpoint, uint32_t xfer_len);
 	void EP0In(const uint8_t* buff, uint32_t size);
+	void AbortEP0In();
 	void CtlError();
 	bool ReadInterrupts(const uint32_t interrupt);
 	uint32_t MakeConfigDescriptor();

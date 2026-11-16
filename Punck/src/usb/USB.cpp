@@ -114,6 +114,7 @@ void USB::InterruptHandler()					// In Drivers\STM32F4xx_HAL_Driver\Src\stm32f4x
 
 					USBUpdateDbg({}, req, {}, {}, {}, nullptr);
 
+					AbortEP0In();		// modulove: a new SETUP ends any control transfer the host gave up on
 					ep0State = EP0State::Setup;
 
 					switch (req.RequestType & 0x1F) {		// originally USBD_LL_SetupStage
@@ -752,7 +753,11 @@ void USB::EPStartXfer(const Direction direction, uint8_t endpoint, uint32_t xfer
 
 		USBx_INEP(endpoint)->DIEPTSIZ &= ~(USB_OTG_DIEPTSIZ_XFRSIZ | USB_OTG_DIEPTSIZ_PKTCNT);
 
-		USBx_INEP(endpoint)->DIEPTSIZ |= (USB_OTG_DIEPTSIZ_PKTCNT & (((xfer_len + ep_maxPacket - 1) / ep_maxPacket) << USB_OTG_DIEPTSIZ_PKTCNT_Pos));
+		// modulove: a zero length packet (control status stage) needs PKTCNT = 1, as in ST's HAL. Upstream wrote 0: the
+		// core then counted below zero (EP0 PKTCNT read back 3), the transfer never completed and every following
+		// control request hung - opening the COM port blocked until the module was restarted (stress test 2026-11-16)
+		const uint32_t packets = (xfer_len == 0) ? 1 : (xfer_len + ep_maxPacket - 1) / ep_maxPacket;
+		USBx_INEP(endpoint)->DIEPTSIZ |= (USB_OTG_DIEPTSIZ_PKTCNT & (packets << USB_OTG_DIEPTSIZ_PKTCNT_Pos));
 		USBx_INEP(endpoint)->DIEPTSIZ |= (USB_OTG_DIEPTSIZ_XFRSIZ & xfer_len);
 
 		USBx_INEP(endpoint)->DIEPCTL |= (USB_OTG_DIEPCTL_CNAK | USB_OTG_DIEPCTL_EPENA);		// EP enable, IN data in FIFO
@@ -777,6 +782,28 @@ void USB::EPStartXfer(const Direction direction, uint8_t endpoint, uint32_t xfer
 
 		USBx_OUTEP(endpoint)->DOEPCTL |= (USB_OTG_DOEPCTL_CNAK | USB_OTG_DOEPCTL_EPENA);		// EP enable
 	}
+}
+
+
+// modulove: called for every new SETUP. If an EP0 IN transfer is still armed, the host has abandoned that control
+// transfer (it timed out, e.g. while the audio interrupt kept this lower priority interrupt waiting) - stop it and
+// flush TxFIFO 0 so the reply to the new request starts clean. All waits are bounded.
+void USB::AbortEP0In()
+{
+	ep0.inBuffRem = 0;
+	if ((USBx_INEP(0)->DIEPCTL & USB_OTG_DIEPCTL_EPENA) == 0) {
+		return;
+	}
+	USBx_INEP(0)->DIEPCTL |= USB_OTG_DIEPCTL_SNAK;
+	for (uint32_t i = 0; i < 10000 && (USBx_INEP(0)->DIEPINT & USB_OTG_DIEPINT_INEPNE) == 0; ++i) {}
+	USBx_INEP(0)->DIEPCTL |= USB_OTG_DIEPCTL_EPDIS;
+	for (uint32_t i = 0; i < 10000 && (USBx_INEP(0)->DIEPINT & USB_OTG_DIEPINT_EPDISD) == 0; ++i) {}
+	USBx_INEP(0)->DIEPINT = USB_OTG_DIEPINT_EPDISD | USB_OTG_DIEPINT_INEPNE;
+	for (uint32_t i = 0; i < 10000 && (USB_OTG_FS->GRSTCTL & USB_OTG_GRSTCTL_AHBIDL) == 0; ++i) {}
+	USB_OTG_FS->GRSTCTL = USB_OTG_GRSTCTL_TXFFLSH | (0 << USB_OTG_GRSTCTL_TXFNUM_Pos);	// flush TxFIFO 0
+	for (uint32_t i = 0; i < 10000 && (USB_OTG_FS->GRSTCTL & USB_OTG_GRSTCTL_TXFFLSH) != 0; ++i) {}
+	USBx_DEVICE->DIEPEMPMSK &= ~1UL;
+	++ep0Aborts;
 }
 
 

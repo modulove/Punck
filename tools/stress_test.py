@@ -422,9 +422,20 @@ def set_mix(mod, values):
 
 
 def restore_snapshot(mod, snap, log):
-    for name, hexraw in snap["structs"].items():
-        mod.write_struct(name, bytes.fromhex(hexraw))             # also restores the engine stored in each config
-        time.sleep(0.1)
+    # SysEx writes are not acknowledged (lost while the MIDI device re-initialises): read back and repeat until equal
+    for attempt in range(4):
+        for name, hexraw in snap["structs"].items():
+            mod.write_struct(name, bytes.fromhex(hexraw))         # also restores the engine stored in each config
+            time.sleep(0.1)
+        time.sleep(0.3)
+        try:
+            wrong = [n for n, h in snap["structs"].items() if mod.read_struct(n).hex() != h]
+        except Exception as e:
+            wrong = [f"read back failed: {e}"]
+        if not wrong:
+            break
+        log(f"restore check: {wrong} differ, writing again")
+        time.sleep(2.0)
     if "mix_raw" in snap:
         mod.write_mix_raw(bytes.fromhex(snap["mix_raw"]))         # master bus over SysEx
     else:
@@ -626,6 +637,7 @@ def main():
     ap.add_argument("--no-record", action="store_true")
     ap.add_argument("--no-random", action="store_true", help="keep the current parameters (engines still change)")
     ap.add_argument("--combos", type=int, default=0, help="limit combinations per pass (0 = all 150)")
+    ap.add_argument("--passes", type=int, default=0, help="stop after this many passes (0 = until --hours)")
     ap.add_argument("--restore", metavar="RUN_FOLDER", help="restore the settings saved at the start of that run, then exit")
     a = ap.parse_args()
 
@@ -709,7 +721,7 @@ def main():
     dead_since = None
     pass_no, pid = 0, 0
     try:
-        while time.time() < t_end:
+        while time.time() < t_end and not (a.passes and pass_no >= a.passes):
             pass_no += 1
             order = combos[:]
             rng.shuffle(order)

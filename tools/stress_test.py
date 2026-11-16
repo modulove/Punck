@@ -27,7 +27,9 @@ Parameter randomisation (Tone Lab ranges from WebEditor/tonelab.html, so only va
 
 After every scenario the console 'cpu' line is checked:
   UNDERRUN   audio interrupt missed a sample          CPU>95    a sample used more than 95 % of its time
-  RESTART    uptime went back / fault count went up   BLOWUP    clipper input above +24 dB or nan / inf
+  RESTART    uptime went back / fault count went up   NAN       nan / inf in the master bus meter
+  RUNAWAY    a second after the notes the level is still 12 dB above the quiet level (self oscillation)
+  HOT        clipper input above +24 dB while hitting (info: maximum gain settings reach it legitimately)
   SILENT     output peak below -60 dBFS while hitting NOCONSOLE console stopped answering (SWD check follows)
   RATE       audio interrupt not at 48000/s (+-2 %)   I2SRESTART the firmware's rate watchdog restarted the I2S
 Results in build/stress/<start>/: results.csv, events.log, params.jsonl, snapshot.json and the audio interface
@@ -571,6 +573,9 @@ def main():
                         log(f"randomise failed: {type(e).__name__} {e}")
                 plog.write(json.dumps({"id": pid, "pass": pass_no, "combo": combo, "mode": mode, "values": chosen}) + "\n")
                 mod.cmd("cpu", wait=0.5)                                 # reset the maxima
+                time.sleep(1.0)
+                base = parse_cpu(mod.cmd("cpu", wait=0.6))               # quiet level with these settings (modular triggers only)
+                base_clip = to_float(base["clip_db"]) if base else None
                 combo_flags, combo_max = [], 0.0
                 for sc in SCENARIOS:
                     events = gen_events(sc, a.scenario_secs, rng)
@@ -603,8 +608,18 @@ def main():
                         if last and r["restarts"] is not None and last.get("restarts") is not None and r["restarts"] > last["restarts"]:
                             flags.append(f"I2SRESTART+{r['restarts'] - last['restarts']}")
                         clip = to_float(r["clip_db"])
-                        if r["nan"] or (clip is not None and clip > 24.0):
-                            flags.append("BLOWUP")
+                        if r["nan"]:
+                            flags.append("NAN")
+                        if clip is not None and clip > 24.0:
+                            flags.append("HOT")                          # info: legitimately hot settings reach this too
+                        # Runaway: a second without notes, the level must fall back near this combination's quiet level
+                        time.sleep(1.0)
+                        q = parse_cpu(mod.cmd("cpu", wait=0.6))
+                        q_clip = to_float(q["clip_db"]) if q else None
+                        if q and q["nan"]:
+                            flags.append("NAN")
+                        if q_clip is not None and base_clip is not None and q_clip > max(base_clip, -20.0) + 12.0:
+                            flags.append(f"RUNAWAY{q_clip:+.0f}dB")
                         peak = to_float(r["peak_db"])
                         if sc != "sparse" and peak is not None and peak < -60.0:
                             flags.append("SILENT")

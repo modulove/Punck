@@ -5,8 +5,9 @@
 #include "Dynamics.h"
 #include <cstring>
 
-// String engine delay lines (3 strings x 5 kB): AXI SRAM, cleared at start-up by KarplusString::Init
-static float __attribute__((section (".ram_d1_data"))) stringBuffer[KarplusString::bufferFloats];
+// String engine delay lines (3 strings x 5 kB): DTCM (.bss) - zero wait states and never evicted from the cache
+// by the reverb (in AXI SRAM the snare string cost ~990 cycles/sample with 3 strings ringing)
+static float stringBuffer[KarplusString::bufferFloats];
 
 void Snare::Play(const uint8_t voice, const uint32_t noteOffset, uint32_t noteRange, const float velocity, const float pitch)
 {

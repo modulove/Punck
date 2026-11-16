@@ -1,4 +1,6 @@
 // Copyright 2014 Emilie Gillet.
+// modulove (Punck fork, same MIT licence): ReadHermite indexes unsigned (the index is always positive, so the
+// result is identical; the wrap becomes a bit mask instead of a signed modulo).
 //
 // Author: Emilie Gillet (emilie.o.gillet@gmail.com)
 //
@@ -77,7 +79,7 @@ class DelayLine {
   
   inline const T ReadHermite(float delay) const {
     MAKE_INTEGRAL_FRACTIONAL(delay)
-    int32_t t = (write_ptr_ + delay_integral + max_delay);
+    size_t t = (write_ptr_ + delay_integral + max_delay);
     const T xm1 = line_[(t - 1) % max_delay];
     const T x0 = line_[(t) % max_delay];
     const T x1 = line_[(t + 1) % max_delay];

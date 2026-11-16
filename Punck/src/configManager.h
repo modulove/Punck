@@ -30,6 +30,8 @@ public:
 	volatile bool saveNow = false;
 	uint32_t lastSave = 0;
 	uint32_t saveCount = 0, eraseCount = 0;					// since boot (console 'cfg')
+	uint32_t failedSaves = 0;								// modulove: records that did not verify (retried on an erased sector)
+	uint32_t lastFlashError = 0;							// FLASH->SR2 error bits of the last failed operation
 	uint8_t configBuffer[BufferSize];	// Need a large buffer as drum sequence data is ~6k (only used by save / restore)
 	uint8_t rxBuffer[2048];				// SysEx decoding and small replies in the USB interrupt (never touches a save in progress)
 
@@ -38,6 +40,7 @@ public:
 	void RequestSave();					// save as soon as possible from the main loop (Tone Lab 'Save', leaving MIDI learn)
 	void CheckAutoSave();				// main loop
 	bool SaveConfig(bool eraseOnly = false);
+	bool WriteRecord(uint32_t freePos, uint32_t cfgSize, bool erase);	// one attempt: optional erase, program, verify
 	uint32_t SetConfig();				// Serialise configuration data into buffer
 	void RestoreConfig();				// gets config from Flash, checks and updates settings accordingly
 	uint32_t FindRecords(uint32_t& latest);	// returns the first free offset in the sector; latest = newest valid record (sectorSize = none)

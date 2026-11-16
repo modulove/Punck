@@ -262,6 +262,8 @@ void CDCHandler::ProcessCommand()
 		printf("Settings: newest record at %lu, free from %lu of %lu bytes; saves since boot %lu, erases %lu; save pending: %s\r\n",
 				latest, freePos, configManager.sectorSize, configManager.saveCount, configManager.eraseCount,
 				configManager.scheduleSave ? "yes" : "no");
+		printf("Failed saves (retried on an erased sector): %lu  last flash error 0x%08lx  bank 2 SR 0x%08lx CR 0x%08lx\r\n",
+				configManager.failedSaves, configManager.lastFlashError, FLASH->SR2, FLASH->CR2);
 
 	} else if (cmd.compare("pots") == 0) {						// Pot positions (0 - 100 %)
 		static constexpr const char* names[] = {"Kick attack", "Kick decay", "Kick level", "Snare filter", "Snare tuning", "Snare level",

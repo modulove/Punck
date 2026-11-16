@@ -431,7 +431,8 @@ def restore_snapshot(mod, snap, log):
             time.sleep(0.1)
         time.sleep(0.3)
         try:
-            wrong = [n for n, h in snap["structs"].items() if mod.read_struct(n).hex() != h]
+            # snapshots from older firmware are shorter: the fields appended since keep their current values
+            wrong = [n for n, h in snap["structs"].items() if mod.read_struct(n).hex()[:len(h)] != h]
         except Exception as e:
             wrong = [f"read back failed: {e}"]
         if not wrong:

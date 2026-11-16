@@ -46,29 +46,57 @@ bool Config::SaveConfig(bool eraseOnly)
 	bool result = true;
 
 	uint32_t latest = sectorSize;
-	uint32_t freePos = eraseOnly ? sectorSize : FindRecords(latest);
+	const uint32_t freePos = eraseOnly ? sectorSize : FindRecords(latest);
 	const uint32_t cfgSize = eraseOnly ? 0 : SetConfig();
 	const uint32_t needed = (cfgSize + 31) & ~31;			// programmed in 32 byte flash words
 
 	FlashUnlock(2);											// Unlock Flash memory for writing
-	FLASH->SR2 = FLASH_ALL_ERRORS;							// Clear error flags in Status Register
+	// modulove: error flags are cleared through CCR2 (writing SR2 does nothing). Upstream wrote SR2, so one error
+	// (seen 2026-11-16: PGSERR + INCERR) made every later save silently write nothing until the next reset.
+	FLASH->CCR2 = FLASH_ALL_ERRORS;
 
-	if (eraseOnly || freePos + needed > sectorSize) {		// sector full (or old / unknown data): erase it
-		FlashEraseSector(7, 2);								// Erase sector 7, Bank 2 (See p152 of manual)
-		FlashWaitForLastOperation(2);
-		SCB_InvalidateDCache_by_Addr(addrFlashBank2Sector7, sectorSize);
-		++eraseCount;
-		freePos = 0;
-	}
-
-	if (!eraseOnly) {
-		result = FlashProgram(addrFlashBank2Sector7 + freePos / 4, reinterpret_cast<uint32_t*>(&configBuffer), cfgSize);
-		SCB_InvalidateDCache_by_Addr(addrFlashBank2Sector7 + freePos / 4, needed);
+	if (eraseOnly) {
+		result = WriteRecord(0, 0, true);
+	} else {
+		result = WriteRecord(freePos, cfgSize, freePos + needed > sectorSize);	// sector full (or unknown data): erase
+		if (!result) {
+			++failedSaves;
+			FLASH->CCR2 = FLASH_ALL_ERRORS;
+			result = WriteRecord(0, cfgSize, true);			// retry once on a freshly erased sector
+			if (!result) {
+				++failedSaves;
+			}
+		}
 		++saveCount;
 	}
 
 	FlashLock(2);											// Lock Bank 2 Flash
 	return result;
+}
+
+
+bool Config::WriteRecord(uint32_t freePos, const uint32_t cfgSize, const bool erase)
+{
+	if (erase) {
+		FlashEraseSector(7, 2);								// Erase sector 7, Bank 2 (See p152 of manual)
+		const bool ok = FlashWaitForLastOperation(2);
+		FLASH->CR2 &= ~(FLASH_CR_SER | FLASH_CR_SNB);		// modulove: end the erase request (as ST's HAL does)
+		SCB_InvalidateDCache_by_Addr(addrFlashBank2Sector7, sectorSize);
+		++eraseCount;
+		freePos = 0;
+		if (!ok) {
+			return false;
+		}
+	}
+	if (cfgSize == 0) {
+		return true;
+	}
+	const uint32_t needed = (cfgSize + 31) & ~31;
+	const bool programmed = FlashProgram(addrFlashBank2Sector7 + freePos / 4, reinterpret_cast<uint32_t*>(&configBuffer), cfgSize);
+	SCB_InvalidateDCache_by_Addr(addrFlashBank2Sector7 + freePos / 4, needed);
+	// modulove: verify - the new record must be complete and identical (boot loads the newest complete record)
+	const uint8_t* rec = reinterpret_cast<const uint8_t*>(addrFlashBank2Sector7) + freePos;
+	return programmed && RecordLength(rec, sectorSize - freePos) == cfgSize && memcmp(rec, configBuffer, cfgSize) == 0;
 }
 
 
@@ -267,7 +295,8 @@ bool Config::FlashWaitForLastOperation(uint32_t bank)
 	volatile uint32_t* bankCCR = &(bank == 1 ? FLASH->CCR1 : FLASH->CCR2);
 
 	if (*bankSR & FLASH_ALL_ERRORS) {					// If any error occurred abort
-		*bankSR = FLASH_ALL_ERRORS;						// Clear all errors
+		lastFlashError = *bankSR & FLASH_ALL_ERRORS;
+		*bankCCR = FLASH_ALL_ERRORS;					// Clear all errors (modulove: CCR - upstream wrote SR, which is read only)
 		return false;
 	}
 
@@ -312,8 +341,9 @@ bool Config::FlashProgram(uint32_t* dest_addr, uint32_t* src_addr, size_t size)
 		__DSB();
 
 		*bankCR &= ~FLASH_CR_PG;						// Clear programming flag
+		return true;
 	}
-	return true;
+	return false;										// modulove: nothing was programmed (upstream returned true)
 }
 
 

@@ -5,7 +5,7 @@
 > Mutable Instruments Plaits voices, a master bus and stability fixes. Based on upstream
 > [dchwebb/Punck](https://github.com/dchwebb/Punck) 06cc991; the original documentation follows below.
 >
-> - **24 engines**, switched by holding a voice button: kick 5, snare 7, hats 3, toms 6. **11 Mutable Instruments
+> - **21 engines**, switched by holding a voice button (toms: Tone Lab): kick 5, snare 7, hats 3, toms 6. **11 Mutable Instruments
 >   algorithms** (MIT): Plaits analog/synthetic bass drum and snare, two hi-hats, modal resonator, string
 >   (Karplus-Strong), FM, virtual analog and waveshaper — the synth engines through Plaits' low-pass gate.
 > - **Master bus**: glue compressor (kick bypasses it), anti-aliased clipper, input/output trim; **per-voice pan**;

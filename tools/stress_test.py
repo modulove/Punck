@@ -25,7 +25,10 @@ Parameter randomisation (Tone Lab ranges from WebEditor/tonelab.html, so only va
   (each chosen control at its minimum or maximum). Every set is logged in params.jsonl (id in results.csv).
   The settings from the start are saved in snapshot.json and restored at the end (also after Ctrl+C).
 
-After every scenario the console 'cpu' line is checked:
+The run does not use the serial console (its USB control requests can hang the upstream USB driver under load):
+engines, parameters and the master bus go over SysEx, the meter after every scenario comes over SysEx (GetMeter),
+and once per combination uptime, fault count, audio rate, I2S and USB recoveries are read over SWD (the Pico probe).
+After every scenario the meter is checked:
   UNDERRUN   audio interrupt missed a sample          CPU>95    a sample used more than 95 % of its time
   RESTART    uptime went back / fault count went up   NAN       nan / inf in the master bus meter
   RUNAWAY    a second after the notes the level is still 12 dB above the quiet level and not falling over 2.5 s
@@ -47,6 +50,7 @@ import re
 import struct
 import subprocess
 import sys
+import threading
 import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -151,9 +155,92 @@ class ToneLab:
 # Module access: console (COM port, reconnecting) and USB MIDI (notes + SysEx through punck_backup)
 # ------------------------------------------------------------------------------------------------
 class Module:
-    def __init__(self, port, midi_hint, log):
-        self.port, self.log, self.con, self.midi_hint = port, log, None, midi_hint
+    def __init__(self, port, midi_hint, log, tl=None, elf=None):
+        self.port, self.log, self.con, self.midi_hint, self.tl = port, log, None, midi_hint, tl
         self.sx = pb.Punck(midi_hint)                             # opens the MIDI in and out port (exclusive on Windows)
+        self.addr = swd_symbols(elf) if elf else {}
+
+    # --- SysEx: meter, master bus, engines ---
+    def meter(self):
+        """(reductionDb, clipDb, peakDb, cpuAvg, cpuMax, underruns); reading resets the maxima. None if no reply."""
+        for attempt in range(3):
+            try:
+                d = self.sx.request([0x26, 0], 0x26, timeout=1.0)
+                raw = bytes(pb.nibble_decode(d[1:]))
+                return struct.unpack("<6f", raw[:24])
+            except TimeoutError:
+                time.sleep(0.2)
+            except Exception as e:
+                self.log(f"MIDI error on meter: {type(e).__name__} {e}; reopening the port")
+                self.reopen_midi()
+        return None
+
+    def metrics(self):
+        m = self.meter()
+        if m is None:
+            return None
+        red, clip, peak, avg, mx, under = m
+        bad = any(math.isnan(x) or math.isinf(x) for x in (red, clip, peak))
+        return {"avg": round(avg, 1), "max": round(mx, 1), "under": int(under), "clip_db": f"{clip:+.1f}",
+                "peak_db": f"{peak:+.1f}", "nan": bad, "cycles": "",
+                "uptime": None, "crashes": None, "rate": None, "restarts": None, "ep0": None}   # per combination over SWD
+
+    def read_mix_raw(self):
+        d = self.midi_call(lambda: self.sx.request([0x24, 0], 0x24, timeout=1.5))
+        return bytes(pb.nibble_decode(d[1:]))
+
+    def write_mix_raw(self, raw):
+        self.midi_call(lambda: self.sx.send([0x25] + pb.nibble_encode(bytes(raw))))
+
+    def read_engines(self):
+        eng = {}
+        for name, key in STRUCT_ENGINE.items():
+            raw = self.read_struct(name)
+            off = self.tl.layout[name]["engine"][0]
+            eng[key] = int(round(struct.unpack_from("<f", raw, off)[0])) + 1
+        return eng
+
+    def set_engine(self, key, e):
+        name = {v: k for k, v in STRUCT_ENGINE.items()}[key]
+        raw = bytearray(self.read_struct(name))
+        struct.pack_into("<f", raw, self.tl.layout[name]["engine"][0], float(e - 1))
+        self.write_struct(name, bytes(raw))                       # StoreConfig applies the engine field
+
+    # --- SWD: health without USB ---
+    def health(self):
+        """uptime_s, crashes, rate, restarts, ep0 over SWD (None if the probe does not answer)."""
+        a = self.addr
+        need = ("SysTickVal", "crashRecord", "audioRate", "i2sRestarts")
+        if not all(k in a for k in need):
+            return None
+        try:
+            import swd
+            regs = [a["SysTickVal"], a["crashRecord"] + 4, a["audioRate"], a["i2sRestarts"]] + ([a["ep0Aborts"]] if "ep0Aborts" in a else [])
+            rc, out = swd.openocd("init", *[f"stm32h743.ap0 read_memory 0x{x:08x} 32 1" for x in regs], timeout=40)
+            v = [int(l.split()[0], 16) for l in out.splitlines() if re.match(r"^\s*0x[0-9a-f]+\s*$", l)]
+            if len(v) < 4:
+                return None
+            return {"uptime": v[0] // 1000, "crashes": v[1], "rate": v[2], "restarts": v[3], "ep0": v[4] if len(v) > 4 else None}
+        except Exception:
+            return None
+
+    def crash_record(self):
+        a = self.addr.get("crashRecord")
+        if a is None:
+            return "?"
+        try:
+            import swd
+            rc, out = swd.openocd("init", f"stm32h743.ap0 read_memory 0x{a:08x} 32 10", timeout=40)
+            v = [int(x, 16) for l in out.splitlines() if re.match(r"^\s*0x[0-9a-f]+(\s+0x[0-9a-f]+)*\s*$", l) for x in l.split()]
+            if len(v) >= 10 and v[1] == 0:
+                return "no faults since power on"
+            if len(v) >= 10:
+                types = ["-", "hard fault", "memory fault", "bus fault", "usage fault"]
+                return (f"faults {v[1]}, last {types[v[2]] if v[2] < 5 else v[2]} at pc 0x{v[3]:08x} lr 0x{v[4]:08x} after {v[9]} ms, "
+                        f"CFSR 0x{v[5]:08x} HFSR 0x{v[6]:08x} BFAR 0x{v[8]:08x}")
+        except Exception as e:
+            return f"crash record read failed: {e}"
+        return "?"
 
     def cmd(self, c, wait=0.5, tries=3):
         """Console command. A write timeout keeps the port open (reopening sends control requests, which a busy
@@ -255,6 +342,27 @@ def parse_cpu(text):
     return r
 
 
+def swd_symbols(elf):
+    """RAM addresses for the SWD health read (nm for globals, gdb for the USB member)."""
+    found = {}
+    tools = glob.glob(r"C:\ST\STM32CubeIDE_*\STM32CubeIDE\plugins\*gnu-tools-for-stm32*\tools\bin")
+    if not tools or not elf or not os.path.exists(elf):
+        return found
+    nm, gdb = os.path.join(tools[0], "arm-none-eabi-nm.exe"), os.path.join(tools[0], "arm-none-eabi-gdb.exe")
+    for line in subprocess.run([nm, elf], capture_output=True, text=True).stdout.splitlines():
+        p = line.split()
+        if len(p) == 3 and p[2] in ("SysTickVal", "crashRecord", "audioRate", "i2sRestarts"):
+            found[p[2]] = int(p[0], 16)
+    try:
+        out = subprocess.run([gdb, "-batch", "-ex", "print &usb.ep0Aborts", elf], capture_output=True, text=True, timeout=30).stdout
+        m = re.search(r"\) (0x[0-9a-f]+)", out)
+        if m:
+            found["ep0Aborts"] = int(m.group(1), 16)
+    except Exception:
+        pass
+    return found
+
+
 def to_float(s, default=None):
     try:
         return float(s)
@@ -280,7 +388,7 @@ def read_status(mod):
 
 def set_engines(mod, combo):
     for key, e in combo.items():
-        mod.cmd(f"engine:{ENGINE_VOICE[key]},{e}", wait=0.15)
+        mod.set_engine(key, e)
 
 
 # ------------------------------------------------------------------------------------------------
@@ -293,7 +401,9 @@ def take_snapshot(mod, tl, path):
         snap["structs"][name] = raw.hex()
         if len(raw) != tl.size.get(name, -1):
             snap.setdefault("size_mismatch", {})[name] = [len(raw), tl.size.get(name)]
-    snap["mix"] = mod.read_mix()
+    raw = mod.read_mix_raw()
+    snap["mix_raw"] = raw.hex()
+    snap["mix"] = {i: round(struct.unpack_from("<f", raw, 4 * i)[0], 5) for i in range(len(raw) // 4)}
     json.dump(snap, open(path, "w"), indent=1)
     return snap
 
@@ -315,7 +425,10 @@ def restore_snapshot(mod, snap, log):
     for name, hexraw in snap["structs"].items():
         mod.write_struct(name, bytes.fromhex(hexraw))             # also restores the engine stored in each config
         time.sleep(0.1)
-    set_mix(mod, snap["mix"])
+    if "mix_raw" in snap:
+        mod.write_mix_raw(bytes.fromhex(snap["mix_raw"]))         # master bus over SysEx
+    else:
+        set_mix(mod, snap["mix"])                                 # older snapshots: console
     log(f"settings restored from snapshot ({len(snap['structs'])} configs, {len(snap['mix'])} mix values)")
 
 
@@ -332,7 +445,7 @@ def randomise(mod, tl, rng, combo, snap, mismatch):
                 struct.pack_into("<f", raw, off, float(combo[STRUCT_ENGINE[name]] - 1))    # keep this combination's engine
             mod.write_struct(name, bytes(raw))
             time.sleep(0.05)
-        set_mix(mod, snap["mix"])
+        mod.write_mix_raw(bytes.fromhex(snap["mix_raw"]))
         return mode, chosen
     extreme = mode == "extreme"
     for name in list(VOICE_STRUCTS) + ["Reverb"]:
@@ -367,7 +480,11 @@ def randomise(mod, tl, rng, combo, snap, mismatch):
         mixraw[i] = tl.to_raw(c["conv"], v)
         mixvals[f"{c['field']}[{c['idx']}]"] = v
     if mixraw:
-        set_mix(mod, mixraw)
+        raw = bytearray(mod.read_mix_raw())
+        for i, v in mixraw.items():
+            if 4 * i + 4 <= len(raw):
+                struct.pack_into("<f", raw, 4 * i, float(v))
+        mod.write_mix_raw(bytes(raw))
     if mixvals:
         chosen["Mix"] = mixvals
     return mode, chosen
@@ -402,9 +519,7 @@ def gen_events(name, secs, rng):
             t = 0.2
             while t < secs:
                 key = rng.choice(list(ENGINES))
-                ev.append((t, f"engine:{ENGINE_VOICE[key]},{rng.randint(1, ENGINES[key])}"))
-                ev.append((t + 0.05, "play:" + ";".join(f"{rng.randint(1, 7)},{rng.randint(1, 127)},{rng.randint(0, 3)}"
-                                                       for _ in range(rng.randint(1, 4)))))
+                ev.append((t, ("engine", key, rng.randint(1, ENGINES[key]))))
                 t += rng.uniform(0.15, 0.4)
     elif name == "rolls":
         for v in VOICES:
@@ -458,8 +573,11 @@ def play_events(mod, events):
             if d > 0.003:
                 time.sleep(d - 0.002)
         late = max(late, (time.perf_counter() - t0) - t)
-        if isinstance(e, str):
-            mod.cmd(e, wait=0.0, tries=1)                             # console command (fire and forget)
+        if isinstance(e, tuple):
+            try:
+                mod.set_engine(e[1], e[2])                            # engine change over SysEx while playing
+            except Exception as ex:
+                return f"SysEx error {ex}", late
         else:
             try:
                 mod.send(e)
@@ -512,7 +630,7 @@ def main():
     a = ap.parse_args()
 
     if a.restore:
-        mod = Module(a.port, a.midi, print)
+        mod = Module(a.port, a.midi, print, ToneLab(os.path.join(ROOT, "WebEditor", "tonelab.html")))
         try:
             restore_snapshot(mod, json.load(open(os.path.join(a.restore, "snapshot.json"))), print)
         finally:
@@ -529,10 +647,24 @@ def main():
         evlog.write(line + "\n")
 
     tl = ToneLab(os.path.join(ROOT, "WebEditor", "tonelab.html"))
-    mod = Module(a.port, a.midi, log)
-    original, switch = read_status(mod)
+    mod = Module(a.port, a.midi, log, tl, a.elf)
+    switch = "?"                                                     # console once, before any load: switch position
+    res = {}
+    th = threading.Thread(target=lambda: res.update(st=read_status(mod)), daemon=True)
+    th.start()
+    th.join(12)                                                      # a stuck COM port must not hang the start
+    if "st" in res:
+        switch = res["st"][1]
+        try:
+            mod.con.s.close()
+        except Exception:
+            pass
+        mod.con = None
+    else:
+        print("console did not answer: switch position unknown (make sure it is not on MIDI learn)", flush=True)
+    original = mod.read_engines()
     if len(original) < 4:
-        sys.exit("could not read the engines from 'status' (console?)")
+        sys.exit("could not read the engines over SysEx")
     if "learn" in switch.lower():
         sys.exit("mode switch is on MIDI learn: notes would change the MIDI map. Move it to Play or Sequence.")
     snap = take_snapshot(mod, tl, os.path.join(out, "snapshot.json"))
@@ -545,7 +677,8 @@ def main():
     log(f"snapshot saved ({len(snap['structs'])} configs, {len(snap['mix'])} mix values)"
         + (f"; layout differs from the Tone Lab, not randomised: {snap['size_mismatch']}" if mismatch else ""))
     log(f"randomised controls: " + ", ".join(f"{k} {len(v)}" for k, v in tl.controls.items()))
-    log("crash record: " + (mod.cmd("crash", wait=0.5) or "?").strip().replace("\r\n", " | "))
+    log(f"SWD health addresses: {', '.join(f'{k} 0x{v:08x}' for k, v in mod.addr.items()) or 'none (no SWD health)'}")
+    log("crash record (SWD): " + mod.crash_record())
 
     rec = None
     if not a.no_record:
@@ -568,7 +701,9 @@ def main():
               for h in range(1, 4) for t in range(1, 3)]
     rng = random.Random(a.seed)
     t_end = time.time() + a.hours * 3600
-    last = parse_cpu(mod.cmd("cpu", wait=0.6))
+    last = mod.metrics()
+    last_health = mod.health()
+    log(f"health: {last_health}")
     totals = {"scenarios": 0, "flags": {}}
     worst, restarts = [], []
     dead_since = None
@@ -594,9 +729,9 @@ def main():
                     except Exception as e:
                         log(f"randomise failed: {type(e).__name__} {e}")
                 plog.write(json.dumps({"id": pid, "pass": pass_no, "combo": combo, "mode": mode, "values": chosen}) + "\n")
-                mod.cmd("cpu", wait=0.5)                                 # reset the maxima
+                mod.meter()                                              # reset the maxima
                 time.sleep(1.0)
-                base = parse_cpu(mod.cmd("cpu", wait=0.6))               # quiet level with these settings (modular triggers only)
+                base = mod.metrics()                                     # quiet level with these settings (modular triggers only)
                 base_clip = to_float(base["clip_db"]) if base else None
                 combo_flags, combo_max = [], 0.0
                 for sc in SCENARIOS:
@@ -605,15 +740,16 @@ def main():
                     if sc == "switching":
                         set_engines(mod, combo)                          # back to this combination
                     time.sleep(0.25)                                     # let the tails ring into the meter
-                    r = parse_cpu(mod.cmd("cpu", wait=0.6))
+                    r = mod.metrics()
                     flags = []
                     if err:
                         flags.append("MIDIERR")
                     if r is None:
-                        flags.append("NOCONSOLE")
+                        flags.append("NOMETER")
                         dead_since = dead_since or time.time()
-                        if time.time() - dead_since > 30:
-                            log(swd_check(a.elf))
+                        if time.time() - dead_since > 20:
+                            log(f"no SysEx meter for 20 s: SWD health {mod.health()}; reopening MIDI")
+                            mod.reopen_midi()
                             dead_since = time.time()
                     else:
                         dead_since = None
@@ -621,7 +757,9 @@ def main():
                             flags.append("RESTART")
                         if last and r["crashes"] is not None and last["crashes"] is not None and r["crashes"] > last["crashes"]:
                             flags.append("FAULT")
-                        if last and r["under"] > last["under"] and "RESTART" not in flags:
+                        if last and r["under"] < last["under"]:
+                            flags.append("RESTART")                      # underrun counter went back: the module restarted
+                        if last and r["under"] > last["under"]:
                             flags.append(f"UNDERRUN+{r['under'] - last['under']}")
                         if r["max"] >= 95.0:
                             flags.append("CPU>95")
@@ -638,7 +776,7 @@ def main():
                             flags.append("HOT")                          # info: legitimately hot settings reach this too
                         # Runaway: a second without notes, the level must fall back near this combination's quiet level
                         time.sleep(1.0)
-                        q = parse_cpu(mod.cmd("cpu", wait=0.6))
+                        q = mod.metrics()
                         q_clip = to_float(q["clip_db"]) if q else None
                         if q and q["nan"]:
                             flags.append("NAN")
@@ -647,7 +785,7 @@ def main():
                             # still loud after a second: long tail (rumble feedback, long hats) or self oscillation?
                             # Runaway only if it does not fall by at least 3 dB over the next 2.5 s
                             time.sleep(2.5)
-                            q2 = parse_cpu(mod.cmd("cpu", wait=0.6))
+                            q2 = mod.metrics()
                             q2_clip = to_float(q2["clip_db"]) if q2 else None
                             if q2_clip is not None and q2_clip > limit and q2_clip > q_clip - 3.0:
                                 flags.append(f"RUNAWAY{q_clip:+.0f}>{q2_clip:+.0f}dB")
@@ -657,7 +795,7 @@ def main():
                         if sc != "sparse" and peak is not None and peak < -60.0:
                             flags.append("SILENT")
                         if "RESTART" in flags or "FAULT" in flags:
-                            log("crash record: " + (mod.cmd("crash", wait=0.5) or "?").strip().replace("\r\n", " | "))
+                            log("crash record (SWD): " + mod.crash_record())
                             restarts.append(time.time())
                             if len([t for t in restarts if time.time() - t < 120]) >= 2:
                                 log("two restarts within 2 minutes: restoring the snapshot settings (boot loop protection)")
@@ -678,6 +816,36 @@ def main():
                         combo_flags.append(f"{sc}:{'/'.join(flags)}")
                         log(f"  FLAG {combo} params {pid} ({mode}) {sc}: {' '.join(flags)}  cpu {rr.get('avg')}/{rr.get('max')}%  "
                             f"{rr.get('cycles', '')}")
+                # once per combination: health over SWD (uptime, faults, audio rate, I2S / USB recoveries)
+                h = mod.health()
+                hflags = []
+                if h is None:
+                    hflags.append("NOSWD")
+                elif last_health:
+                    if h["uptime"] < last_health["uptime"]:
+                        hflags.append("RESTART")
+                    if h["crashes"] > last_health["crashes"]:
+                        hflags.append("FAULT")
+                    if abs(h["rate"] - 48000) > 960:
+                        hflags.append(f"RATE{h['rate']}")
+                    if h["restarts"] > last_health["restarts"]:
+                        hflags.append(f"I2SRESTART+{h['restarts'] - last_health['restarts']}")
+                    if h.get("ep0") is not None and last_health.get("ep0") is not None and h["ep0"] > last_health["ep0"]:
+                        hflags.append(f"EP0ABORT+{h['ep0'] - last_health['ep0']}")
+                if h is not None:
+                    last_health = h
+                if hflags:
+                    combo_flags.append(f"health:{'/'.join(hflags)}")
+                    log(f"  FLAG {combo} params {pid} ({mode}) health: {' '.join(hflags)}  {h}")
+                    if "FAULT" in hflags or "RESTART" in hflags:
+                        log("crash record (SWD): " + mod.crash_record())
+                    for f in hflags:
+                        k = f.split("+")[0]
+                        totals["flags"][k] = totals["flags"].get(k, 0) + 1
+                hh = h or {}
+                csv.write(f"{datetime.datetime.now():%H:%M:%S},{pass_no},{combo['kick']},{combo['snare']},{combo['hats']},{combo['toms']},"
+                          f"{pid},{mode},health,0,0,,,,{hh.get('uptime', '')},{hh.get('crashes', '')},,,{hh.get('rate', '')},"
+                          f"{hh.get('restarts', '')},{' '.join(hflags)},ep0 {hh.get('ep0', '')}\n")
                 log(f"[{pass_no}.{ci + 1:03d}] k{combo['kick']} s{combo['snare']} h{combo['hats']} t{combo['toms']} params {pid} {mode:8s} "
                     f"peak cpu {combo_max:.0f}%" + (f"  flags: {', '.join(combo_flags)}" if combo_flags else "  ok"))
     except KeyboardInterrupt:

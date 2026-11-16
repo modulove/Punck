@@ -102,6 +102,17 @@ public:
 	void CheckButtons();
 	void StartOneHit();
 	void IdleTasks();
+
+	// modulove: nan / inf protection - per voice (Voice order), then reverb, master bus, output
+	static constexpr uint32_t nanReverb = Voice::count, nanBus = Voice::count + 1, nanOut = Voice::count + 2;
+	uint32_t nanEvents[Voice::count + 3] = {};
+	volatile bool reverbClearPending = false;
+	static bool Finite(const float x) {
+		uint32_t b;
+		memcpy(&b, &x, sizeof(b));
+		return (b & 0x7F800000u) != 0x7F800000u;				// exponent all ones = inf or nan
+	}
+	void RecoverVoice(const uint32_t v);
 	void SetAllLeds(float val);
 	void RestoreAllLeds();
 
@@ -159,6 +170,7 @@ public:
 		float cpuAvg;						// Audio interrupt load (%)
 		float cpuMax;
 		float underruns;
+		float nanEvents;					// modulove: nan / inf recoveries since boot (all voices and the master bus)
 	};
 	void GetMeter(Meter& m);					// Reads and resets the peak values
 

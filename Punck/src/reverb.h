@@ -123,6 +123,8 @@ public:
 		return output;
 	}
 
+	void Clear() { memset(delayBuffer, 0, sizeof(delayBuffer)); }		// modulove: nan recovery (main loop)
+
 private:
 	static constexpr float delayMsRange = 50;
 	static constexpr float delaySamplesRange = delayMsRange * 0.001 * systemSampleRate;		// 2400 at 48kHz
@@ -216,6 +218,17 @@ public:
 		filter.SetCutoff(config.filterCutoff);
 	}
 
+
+	// modulove: empty every delay line and the input filter after nan / inf reached the reverb. Main loop only (about
+	// 500 KB of buffers); the audio interrupt bypasses the reverb until this has run (VoiceManager::reverbClearPending)
+	void Clear()
+	{
+		for (auto& d : diffuserStep) {
+			d.Clear();
+		}
+		memset(reverbMixBuffer, 0, sizeof(reverbMixBuffer));
+		filter.Init();
+	}
 
 	std::pair<float, float> Process(float sampleL, float sampleR) {
 		sampleL = filter.CalcFilter(sampleL, channel::left);

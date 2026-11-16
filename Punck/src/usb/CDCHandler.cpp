@@ -216,6 +216,17 @@ void CDCHandler::ProcessCommand()
 		if (i2sRestarts) {
 			printf("Last bad rate: %lu/s\r\n", lastBadRate);
 		}
+		{
+			const auto& n = voiceManager.nanEvents;
+			uint32_t total = 0;
+			for (auto v : n) {
+				total += v;
+			}
+			if (total) {
+				printf("NaN/inf recoveries: kick %lu snare %lu hats %lu samples %lu toms %lu claps %lu reverb %lu bus %lu out %lu\r\n",
+						n[0], n[1], n[2], n[3] + n[4], n[5], n[6], n[VoiceManager::nanReverb], n[VoiceManager::nanBus], n[VoiceManager::nanOut]);
+			}
+		}
 		printf("Comp reduction max: %.1f dB  into clipper: %+.1f dB  output peak: %+.1f dBFS\r\n", m.reductionDb, m.clipDb, m.peakDb);
 		static constexpr const char* blocks[] = {"kick", "snare", "hats", "samples", "-", "toms", "claps", "reverb", "master", "trig"};
 		printf("Cycles avg/max per sample (budget 8333):");

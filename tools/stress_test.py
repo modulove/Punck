@@ -167,7 +167,9 @@ class Module:
             try:
                 d = self.sx.request([0x26, 0], 0x26, timeout=1.0)
                 raw = bytes(pb.nibble_decode(d[1:]))
-                return struct.unpack("<6f", raw[:24])
+                vals = struct.unpack("<6f", raw[:24])
+                nan = struct.unpack("<f", raw[24:28])[0] if len(raw) >= 28 else None   # firmware r18+: nan recoveries
+                return vals + (nan,)
             except TimeoutError:
                 time.sleep(0.2)
             except Exception as e:
@@ -179,10 +181,10 @@ class Module:
         m = self.meter()
         if m is None:
             return None
-        red, clip, peak, avg, mx, under = m
+        red, clip, peak, avg, mx, under, nanrec = m
         bad = any(math.isnan(x) or math.isinf(x) for x in (red, clip, peak))
         return {"avg": round(avg, 1), "max": round(mx, 1), "under": int(under), "clip_db": f"{clip:+.1f}",
-                "peak_db": f"{peak:+.1f}", "nan": bad, "cycles": "",
+                "peak_db": f"{peak:+.1f}", "nan": bad, "cycles": "", "nanrec": int(nanrec) if nanrec is not None else None,
                 "uptime": None, "crashes": None, "rate": None, "restarts": None, "ep0": None}   # per combination over SWD
 
     def read_mix_raw(self):
@@ -775,6 +777,8 @@ def main():
                             flags.append("FAULT")
                         if last and r["under"] < last["under"]:
                             flags.append("RESTART")                      # underrun counter went back: the module restarted
+                        if last and r.get("nanrec") is not None and last.get("nanrec") is not None and r["nanrec"] > last["nanrec"]:
+                            flags.append(f"NANREC+{r['nanrec'] - last['nanrec']}")  # a voice produced nan / inf, caught by r18
                         if last and r["under"] > last["under"]:
                             flags.append(f"UNDERRUN+{r['under'] - last['under']}")
                         if r["max"] >= 95.0:

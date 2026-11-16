@@ -90,6 +90,7 @@ public:
 	}
 
 	float ReductionDb() const { return -gain * dbPerBit; }
+	void Reset() { hpL = hpR = lastL = lastR = peak = gain = 0.0f; }			// modulove: nan recovery
 
 private:
 	float threshold = -2.0f, slope = -0.66f, knee = 1.0f, makeup = 0.0f;
@@ -121,6 +122,8 @@ public:
 		x1 = x;
 		return y;
 	}
+
+	void Reset() { x1 = 0.0f; }													// modulove: nan recovery
 
 private:
 	float x1 = 0.0f;

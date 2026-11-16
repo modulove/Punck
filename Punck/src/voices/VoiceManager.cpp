@@ -116,13 +116,28 @@ void VoiceManager::Output()
 	UpdateDuck();
 
 	// Mix buses: kick stays dry and unducked; drums, samplers and reverb return are ducked by the kick (sidechain)
+	// modulove: a voice output that is nan / inf is dropped and the voice re-initialised (RecoverVoice). Let into the bus
+	// it poisoned compressor, clipper and reverb for good: silence with full scale DC on the output (stress test).
 	float kickOut[2] = {kickPlayer.outputLevel[left], kickPlayer.outputLevel[right]};
+	if (!Finite(kickOut[left]) || !Finite(kickOut[right])) {
+		kickOut[left] = kickOut[right] = 0.0f;
+		RecoverVoice(Voice::kick);
+	}
 	float drumsOut[2] = {0.0f, 0.0f};
 	float samplesOut[2] = {samples.outputLevel[left], samples.outputLevel[right]};
+	if (!Finite(samplesOut[left]) || !Finite(samplesOut[right])) {
+		samplesOut[left] = samplesOut[right] = 0.0f;
+		RecoverVoice(Voice::samplerA);
+	}
 	for (auto& nm : noteMapper) {
 		if (nm.drumVoice != nullptr && nm.voiceIndex == 0 && nm.voice != Voice::kick && nm.voice != Voice::samplerA) {
-			drumsOut[left]  += nm.drumVoice->outputLevel[left];
-			drumsOut[right] += nm.drumVoice->outputLevel[right];
+			const float l = nm.drumVoice->outputLevel[left], r = nm.drumVoice->outputLevel[right];
+			if (Finite(l) && Finite(r)) {
+				drumsOut[left]  += l;
+				drumsOut[right] += r;
+			} else {
+				RecoverVoice(nm.voice);
+			}
 		}
 	}
 
@@ -132,8 +147,18 @@ void VoiceManager::Output()
 #endif
 
 	const uint32_t reverbCycles = DWT->CYCCNT;
-	auto [reverbL, reverbR] = reverb.Process(drumsOut[left] + samplesOut[left] + mixConfig.kickReverbSend * kickOut[left],
-											 drumsOut[right] + samplesOut[right] + mixConfig.kickReverbSend * kickOut[right]);
+	float reverbL = 0.0f, reverbR = 0.0f;
+	if (!reverbClearPending) {								// bypassed while the main loop empties the delay lines
+		auto [rl, rr] = reverb.Process(drumsOut[left] + samplesOut[left] + mixConfig.kickReverbSend * kickOut[left],
+									   drumsOut[right] + samplesOut[right] + mixConfig.kickReverbSend * kickOut[right]);
+		if (Finite(rl) && Finite(rr)) {
+			reverbL = rl;
+			reverbR = rr;
+		} else {
+			++nanEvents[nanReverb];
+			reverbClearPending = true;						// IdleTasks clears the reverb
+		}
+	}
 
 #if (TIMINGDEBUG)
 	reverbTime = TIM3->CNT - reverbStart;
@@ -156,14 +181,23 @@ void VoiceManager::Output()
 	for (uint8_t c = 0; c < 2; ++c) {
 		kickOut[c] *= inGain;
 		bus[c] = inGain * (drumsGain * drumsOut[c] + samplesGain * samplesOut[c] + reverbGain * reverbOut[c]) + (kickThroughComp ? kickOut[c] : 0.0f);
+		if (!Finite(bus[c]) || !Finite(kickOut[c])) {		// overflow from extreme gains: drop the sample
+			bus[c] = kickOut[c] = 0.0f;
+			++nanEvents[nanBus];
+		}
 	}
 
 	if (mixConfig.compOn > 0.5f) {
 		const float gain = compressor.Gain(bus[left], bus[right]);
-		const float busGain = (1.0f - mixConfig.compMix) + mixConfig.compMix * gain;		// parallel blend
-		bus[left] *= busGain;
-		bus[right] *= busGain;
-		meterReduction = std::max(meterReduction, compressor.ReductionDb());
+		if (Finite(gain)) {
+			const float busGain = (1.0f - mixConfig.compMix) + mixConfig.compMix * gain;		// parallel blend
+			bus[left] *= busGain;
+			bus[right] *= busGain;
+			meterReduction = std::max(meterReduction, compressor.ReductionDb());
+		} else {
+			compressor.Reset();
+			++nanEvents[nanBus];
+		}
 	}
 
 	float combinedOutput[2];
@@ -191,6 +225,13 @@ void VoiceManager::Output()
 			testTonePhase -= 1.0f;
 		}
 		combinedOutput[left] = combinedOutput[right] = testToneLevel * std::sin(6.2831853f * testTonePhase);
+	}
+	for (uint8_t c = 0; c < 2; ++c) {
+		if (!Finite(combinedOutput[c])) {					// last line of defence: never nan / full scale DC on the DAC
+			combinedOutput[c] = 0.0f;
+			clipper[c].Reset();
+			++nanEvents[nanOut];
+		}
 	}
 	meterPeak = std::max(meterPeak, std::max(std::abs(combinedOutput[left]), std::abs(combinedOutput[right])));
 
@@ -565,8 +606,25 @@ float VoiceManager::SixteenthSamples()
 }
 
 
+void VoiceManager::RecoverVoice(const uint32_t v)
+{
+	// A voice produced nan / inf: silence it and re-initialise its engine state (classic engines also reset their
+	// filters on the next hit). Counted per voice for the console ('cpu') and the SysEx meter.
+	++nanEvents[v];
+	DrumVoice* dv = noteMapper[v].drumVoice;
+	if (dv != nullptr) {
+		dv->outputLevel[left] = dv->outputLevel[right] = 0.0f;
+		dv->SetEngine(dv->GetEngine());
+	}
+}
+
+
 void VoiceManager::IdleTasks()
 {
+	if (reverbClearPending) {								// nan / inf reached the reverb: empty it (the interrupt bypasses it)
+		reverb.Clear();
+		reverbClearPending = false;
+	}
 	for (auto& nm : noteMapper) {
 		// If voiceIndex is > 0 drum voice has multiple channels (eg sampler)
 		// Calculate filters even when not playing so ready for next hit (coefficients will only be updated if cut off has changed)
@@ -670,6 +728,11 @@ void VoiceManager::GetMeter(Meter& m)
 	m.cpuAvg = cpuLoad.avg * 100.0f;
 	m.cpuMax = cpuLoad.max * 100.0f;
 	m.underruns = static_cast<float>(i2sUnderrun);
+	uint32_t nans = 0;
+	for (auto n : nanEvents) {
+		nans += n;
+	}
+	m.nanEvents = static_cast<float>(nans);
 	meterReduction = meterClip = meterPeak = 0.0f;
 	cpuLoad.max = 0.0f;
 }

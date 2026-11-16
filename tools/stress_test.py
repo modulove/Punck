@@ -742,9 +742,13 @@ def main():
                         log(f"randomise failed: {type(e).__name__} {e}")
                 plog.write(json.dumps({"id": pid, "pass": pass_no, "combo": combo, "mode": mode, "values": chosen}) + "\n")
                 mod.meter()                                              # reset the maxima
-                time.sleep(1.0)
-                base = mod.metrics()                                     # quiet level with these settings (modular triggers only)
-                base_clip = to_float(base["clip_db"]) if base else None
+                base_clip = None                                         # quiet level with these settings (modular triggers only):
+                for _ in range(2):                                       # the louder of two 1 s windows (one can fall in a gap)
+                    time.sleep(1.0)
+                    b = mod.metrics()
+                    v = to_float(b["clip_db"]) if b else None
+                    if v is not None and (base_clip is None or v > base_clip):
+                        base_clip = v
                 combo_flags, combo_max = [], 0.0
                 for sc in SCENARIOS:
                     events = gen_events(sc, a.scenario_secs, rng)
@@ -799,7 +803,7 @@ def main():
                             time.sleep(2.5)
                             q2 = mod.metrics()
                             q2_clip = to_float(q2["clip_db"]) if q2 else None
-                            if q2_clip is not None and q2_clip > limit and q2_clip > q_clip - 3.0:
+                            if q2_clip is not None and q2_clip > limit and q2_clip > q_clip - 3.0 and q2_clip > 0.0:
                                 flags.append(f"RUNAWAY{q_clip:+.0f}>{q2_clip:+.0f}dB")
                             else:
                                 flags.append(f"TAIL{q_clip:+.0f}>{q2_clip if q2_clip is not None else 0:+.0f}dB")

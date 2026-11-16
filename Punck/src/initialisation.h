@@ -94,3 +94,4 @@ void RestartI2S();
 
 // modulove: audio rate watchdog (main loop): interrupt calls per second, I2S restarts, last rate that caused one
 extern uint32_t audioRate, i2sRestarts, lastBadRate;
+extern uint32_t cpuClockMHz;							// 480 on revision V devices, else 400 (InitClocks)

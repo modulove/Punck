@@ -10,27 +10,25 @@
 // I2S: Peripheral Clock (AKA per_ck) set to HSI = 64MHz
 // ADC: Peripheral Clock (AKA per_ck) set to HSI = 64MHz
 
-#if CPUCLOCK == 400
-// 8MHz (HSE) / 2 (M) * 200 (N) / 2 (P) = 400MHz
 // 12MHz (HSE) / 3 (M) * 200 (N) / 2 (P) = 400MHz
+// modulove: 480 MHz on revision V devices (12MHz / 3 * 240 = 960 MHz VCO / 2), chosen at run time from DBGMCU REV_ID:
+// earlier revisions (Y) are limited to 400 MHz. The upstream 480 MHz settings assumed an 8 MHz crystal (M = 2), which
+// with the Punck's 12 MHz crystal would put the VCO at 1440 MHz.
 #define PLL_M1 3
 #define PLL_N1 200
+#define PLL_N1_480 240
 #define PLL_P1 1			// 0000001: pll1_p_ck = vco1_ck / 2
-#define PLL_Q1 4			// This is used for I2S clock: 8MHz (HSE) / 2 (M) * 200 (N) / 4 (Q) = 200MHz
+#define PLL_Q1 4			// pll1_q_ck (unused: I2S runs from PLL3)
 #define PLL_R1 2
 
-#else
-// 8MHz (HSE) / 2 (M) * 240 (N) / 2 (P) = 480MHz
-#define PLL_M1 2
-#define PLL_N1 240
-#define PLL_P1 1			// 0000001: pll1_p_ck = vco1_ck / 2
-#define PLL_Q1 4			// This is used for I2S clock: 8MHz (HSE) / 2 (M) * 240 (N) / 4 (Q) = 240MHz
-#define PLL_R1 2
-#endif
+uint32_t cpuClockMHz = 400;
 
 
 void InitClocks()
 {
+	const bool revV = (DBGMCU->IDCODE >> 16) == 0x2003;			// revision V: VOS0 and 480 MHz allowed
+	cpuClockMHz = revV ? 480 : 400;
+
 	RCC->APB4ENR |= RCC_APB4ENR_SYSCFGEN;			// Enable System configuration controller clock
 
 	// Voltage scaling - see Datasheet page 113. VOS1 > 300MHz; VOS2 > 200MHz; VOS3 < 200MHz
@@ -38,12 +36,13 @@ void InitClocks()
 	PWR->D3CR |= PWR_D3CR_VOS;						// Configure voltage scaling level 1 before engaging overdrive (0b11 = VOS1)
 	while ((PWR->CSR1 & PWR_CSR1_ACTVOSRDY) == 0);	// Check Voltage ready 1= Ready, voltage level at or above VOS selected level
 
-#if CPUCLOCK > 400
-	// Activate the LDO regulator overdrive mode. Must be written only in VOS1 voltage scaling mode.
-	// This activates VSO0 mode for use in clock speeds from 400MHz to 480MHz
-	SYSCFG->PWRCR |= SYSCFG_PWRCR_ODEN;
-	while ((SYSCFG->PWRCR & SYSCFG_PWRCR_ODEN) == 0);
-#endif
+	if (revV) {
+		// Activate the LDO regulator overdrive mode. Must be written only in VOS1 voltage scaling mode.
+		// This activates VSO0 mode for use in clock speeds from 400MHz to 480MHz
+		SYSCFG->PWRCR |= SYSCFG_PWRCR_ODEN;
+		while ((SYSCFG->PWRCR & SYSCFG_PWRCR_ODEN) == 0);
+		while ((PWR->D3CR & PWR_D3CR_VOSRDY) == 0);			// modulove: wait until VOS0 is reached (RM0433)
+	}
 
 	RCC->CR |= RCC_CR_HSEON;						// Turn on external oscillator
 	while ((RCC->CR & RCC_CR_HSERDY) == 0);			// Wait till HSE is ready
@@ -53,7 +52,7 @@ void InitClocks()
 	                 PLL_M1 << RCC_PLLCKSELR_DIVM1_Pos;
 
 	// PLL 1 dividers
-	RCC->PLL1DIVR = (PLL_N1 - 1) << RCC_PLL1DIVR_N1_Pos |
+	RCC->PLL1DIVR = ((revV ? PLL_N1_480 : PLL_N1) - 1) << RCC_PLL1DIVR_N1_Pos |
 			        PLL_P1 << RCC_PLL1DIVR_P1_Pos |
 			        (PLL_Q1 - 1) << RCC_PLL1DIVR_Q1_Pos |
 			        (PLL_R1 - 1) << RCC_PLL1DIVR_R1_Pos;
@@ -79,6 +78,10 @@ void InitClocks()
 	// By default Flash latency is set to 7 wait states - set to 4 for now but may need to increase
 	FLASH->ACR = (FLASH->ACR & ~FLASH_ACR_LATENCY) | FLASH_ACR_LATENCY_4WS;
 	while ((FLASH->ACR & FLASH_ACR_LATENCY_Msk) != FLASH_ACR_LATENCY_4WS);
+	if (revV) {
+		// modulove: 240 MHz AXI at VOS0: 4 wait states and programming delay 2 (as ST's CubeMX sets for 480 MHz)
+		FLASH->ACR = (FLASH->ACR & ~FLASH_ACR_WRHIGHFREQ) | (2 << FLASH_ACR_WRHIGHFREQ_Pos);
+	}
 
 	SystemCoreClockUpdate();						// Update SystemCoreClock (system clock frequency)
 }

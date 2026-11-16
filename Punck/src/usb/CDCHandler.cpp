@@ -211,8 +211,8 @@ void CDCHandler::ProcessCommand()
 		voiceManager.GetMeter(m);
 		printf("CPU avg: %.1f%%  max: %.1f%%  underruns: %lu  uptime: %lu s  crashes: %lu\r\n", m.cpuAvg, m.cpuMax, i2sUnderrun,
 				SysTickVal / 1000, crashRecord.count);
-		printf("Audio rate: %lu/s (48000)  I2S restarts: %lu%s  USB EP0 aborts: %lu\r\n", audioRate, i2sRestarts,
-				i2sRestarts ? "  <- rate watchdog fired" : "", usb->ep0Aborts);
+		printf("Audio rate: %lu/s (48000)  I2S restarts: %lu%s  USB EP0 aborts: %lu  clock %lu MHz\r\n", audioRate, i2sRestarts,
+				i2sRestarts ? "  <- rate watchdog fired" : "", usb->ep0Aborts, SystemCoreClock / 1000000);
 		if (i2sRestarts) {
 			printf("Last bad rate: %lu/s\r\n", lastBadRate);
 		}
@@ -229,7 +229,7 @@ void CDCHandler::ProcessCommand()
 		}
 		printf("Comp reduction max: %.1f dB  into clipper: %+.1f dB  output peak: %+.1f dBFS\r\n", m.reductionDb, m.clipDb, m.peakDb);
 		static constexpr const char* blocks[] = {"kick", "snare", "hats", "samples", "-", "toms", "claps", "reverb", "master", "trig"};
-		printf("Cycles avg/max per sample (budget 8333):");
+		printf("Cycles avg/max per sample (budget %lu):", SystemCoreClock / 48000);
 		for (uint32_t i = 0; i < VoiceManager::profCount; ++i) {
 			if (i != VoiceManager::Voice::samplerB) {
 				printf(" %s %.0f/%.0f", blocks[i], voiceManager.profAvg[i], voiceManager.profMax[i]);

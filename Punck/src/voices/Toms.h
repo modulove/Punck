@@ -3,12 +3,13 @@
 #include "Filter.h"
 #include "DrumVoice.h"
 #include "stmlib/dsp/filter.h"
+#include "KarplusString.h"
 
 class NoteMapper;
 
 class Toms : public DrumVoice {
 public:
-	enum Engine : uint8_t {classic = 0, bass, engineCount};
+	enum Engine : uint8_t {classic = 0, bass, pluck, engineCount};
 
 	void Play(const uint8_t voice, const uint32_t noteOffset, const uint32_t noteRange, const float velocity, const float pitch);
 	void Play(const uint8_t voice, const uint32_t index);
@@ -29,6 +30,8 @@ private:
 	void CalcToms();
 	float CalcBass();
 	void BassNote(const float ratio, const float velocity);
+	void PluckNote(const float ratio, const float velocity);
+	void Note(const float ratio, const float velocity) { if (engine == pluck) PluckNote(ratio, velocity); else BassNote(ratio, velocity); }
 
 	enum class Phase {Off, Ramp, Sine} phase;
 	static constexpr uint8_t partialCount = 2;
@@ -54,6 +57,12 @@ private:
 	uint32_t quietCount = 0;
 	bool idle = true;
 
+	// Pluck engine: Mutable Instruments Plaits string (Karplus-Strong), up to 3 strings in rotation
+	KarplusString kString;
+	bool stringReady = false;
+	static constexpr float stringGain = 1.0f;			// output scaling (tools/hostsim)
+	static constexpr float maxStringDamping = 0.94f;	// 0.95+ sustains forever in Plaits: keep every note finite
+
 	struct Config {
 		float decaySpeed[partialCount] = {0.9995f, 0.9993f};	// Volume decay speed
 		float rampInc = 0.2f;									// Initial wave steep ramp
@@ -77,6 +86,14 @@ private:
 		float bassFollowVel = 0.85f;			// Auto note velocity (x kick velocity)
 		float bassAccent = 0.5f;				// Velocity -> filter envelope
 		float bassLevel = 0.9f;					// Output level (toms have no level pot)
+
+		// modulove: pluck engine (Mutable Plaits string; same notes as the bass incl. the auto notes after each kick)
+		float pluckPitch = 130.81f;				// Hz at chromatic note 60 and for drum map / auto notes (C3)
+		float pluckBrightness = 0.5f;			// Exciter and string brightness 0 - 1
+		float pluckDecay = 0.45f;				// Damping 0 - 1 (Plaits MORPH: longer towards 1; velocity adds a little)
+		float pluckStructure = 0.25f;			// below 0.24 buzz (curved bridge), 0.25 clean string, up to 1 metallic / inharmonic
+		float pluckStrings = 3.0f;				// Strings in rotation 1 - 3 (tails overlap; fewer = less CPU)
+		float pluckLevel = 1.0f;				// Output level
 	} config;
 
 };

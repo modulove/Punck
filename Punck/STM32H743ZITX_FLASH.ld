@@ -64,8 +64,8 @@ SECTIONS
   {
     . = ALIGN(4);
     /* modulove: the audio interrupt code runs from ITCM (see .itcm_text below), everything else from flash */
-    *(EXCLUDE_FILE(*voicemanager.o *kick.o *snare.o *hihat.o *toms.o *claps.o *samples.o *sequencer.o *main.o *bpfilter.o) .text)
-    *(EXCLUDE_FILE(*voicemanager.o *kick.o *snare.o *hihat.o *toms.o *claps.o *samples.o *sequencer.o *main.o *bpfilter.o) .text*)
+    *(EXCLUDE_FILE(*voicemanager.o *kick.o *snare.o *hihat.o *toms.o *claps.o *samples.o *sequencer.o *main.o *bpfilter.o *karplusstring.o) .text)
+    *(EXCLUDE_FILE(*voicemanager.o *kick.o *snare.o *hihat.o *toms.o *claps.o *samples.o *sequencer.o *main.o *bpfilter.o *karplusstring.o) .text*)
     *(.glue_7)         /* glue arm to thumb code */
     *(.glue_7t)        /* glue thumb to arm code */
     *(.eh_frame)
@@ -154,6 +154,7 @@ SECTIONS
     *sequencer.o(.text .text*)
     *main.o(.text .text*)
     *bpfilter.o(.text .text*)
+    *karplusstring.o(.text .text*)
     . = ALIGN(4);
     itcm_text_end = .;
   } >ITCMRAM AT> FLASH

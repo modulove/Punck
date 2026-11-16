@@ -664,6 +664,7 @@ def main():
     ap.add_argument("--no-random", action="store_true", help="keep the current parameters (engines still change)")
     ap.add_argument("--combos", type=int, default=0, help="limit combinations per pass (0 = all 150)")
     ap.add_argument("--passes", type=int, default=0, help="stop after this many passes (0 = until --hours)")
+    ap.add_argument("--only", metavar="VOICE=ENGINE,...", help="only combinations containing any of these engines, e.g. snare=6,toms=3")
     ap.add_argument("--restore", metavar="RUN_FOLDER", help="restore the settings saved at the start of that run, then exit")
     ap.add_argument("--replay", metavar="RUN_FOLDER:ID,ID", help="re-run these logged parameter sets (engines and values) once")
     a = ap.parse_args()
@@ -746,8 +747,13 @@ def main():
               "crashes,clip_db,peak_db,rate,i2s_restarts,flags,cycles\n")
     plog = open(os.path.join(out, "params.jsonl"), "w", buffering=1)
 
-    combos = [{"kick": k, "snare": s, "hats": h, "toms": t} for k in range(1, 6) for s in range(1, 6)
-              for h in range(1, 4) for t in range(1, 3)]
+    # engines per voice (firmware r23: snare 6 = string, toms 3 = pluck)
+    combos = [{"kick": k, "snare": s, "hats": h, "toms": t} for k in range(1, 6) for s in range(1, 7)
+              for h in range(1, 4) for t in range(1, 4)]
+    if a.only:                                                        # e.g. snare=6,toms=3: combos with ANY of these engines
+        want = [kv.split("=") for kv in a.only.split(",")]
+        combos = [c for c in combos if any(c[k] == int(v) for k, v in want)]
+        log(f"--only {a.only}: {len(combos)} combinations")
     rng = random.Random(a.seed)
     t_end = time.time() + a.hours * 3600
     last = mod.metrics()

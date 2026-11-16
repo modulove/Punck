@@ -488,11 +488,221 @@ static void SnareSustainTest()
 }
 
 
+// String engine (Mutable Plaits string): snare engine 6 and toms engine 3 'pluck'. Run separately ('strings') so
+// the reference renders of the other engines keep their random number sequence (bit-identical comparison).
+// Snare config indices: engine 11, pitch 12, decay 14, stringStructure 23, stringStrings 24, stringLevel 25.
+// Toms: engine 9, bassFollow 19, pluckPitch 23, pluckBrightness 24, pluckDecay 25, pluckStructure 26, pluckStrings 27.
+static float Rnd01() { return (HostRandom() & 0xFFFF) / 65535.0f; }
+
+static void StringTests(const std::string& dir)
+{
+	const float beat = 60.0f / 124.0f * systemSampleRate;
+	alignas(Rig) static unsigned char mem[sizeof(Rig)];
+
+	// 1. Snare: 808 reference, then the string at several settings (4 hits each, Level pot at noon)
+	struct Case { const char* name; uint32_t engine; float structure, filterPot, decay, strings; };
+	const Case cases[] = {
+		{"808 snare (reference)", 1, 0.25f, 0.5f, 0.35f, 3}, {"string clean", 5, 0.25f, 0.5f, 0.35f, 3},
+		{"string dark (filter 0.2)", 5, 0.25f, 0.2f, 0.35f, 3}, {"string bright (filter 0.9)", 5, 0.25f, 0.9f, 0.35f, 3},
+		{"string long (decay 0.7)", 5, 0.25f, 0.5f, 0.7f, 3}, {"string buzz (struct 0.05)", 5, 0.05f, 0.6f, 0.5f, 3},
+		{"string metallic (struct 0.6)", 5, 0.6f, 0.6f, 0.5f, 3}, {"string bell (struct 0.95)", 5, 0.95f, 0.7f, 0.6f, 3}};
+	Wav wav;
+	printf("\nSnare string engine (Level pot at noon, 4 hits at 124 BPM, 200 Hz):\n");
+	for (const auto& c : cases) {
+		Rig& r = *new (mem) Rig;
+		r.snare.SetEngine(c.engine);
+		Rig::Set(r.snare, 14, c.decay);
+		Rig::Set(r.snare, 23, c.structure);
+		Rig::Set(r.snare, 24, c.strings);
+		Pots(0.5f, 0.5f, 0.3f);
+		ADC_array[ADC_SnareFilter] = static_cast<uint16_t>(c.filterPot * 65535.0f);
+		Stats st;
+		auto t0 = std::chrono::steady_clock::now();
+		for (uint32_t s = 0; s < 4 * static_cast<uint32_t>(beat); ++s) {
+			if (s % static_cast<uint32_t>(beat) == 0) r.snare.Play(0, 0, 2, 1.0f, 1.0f);
+			r.snare.CalcOutput();
+			wav.Add(r.snare.outputLevel[0], r.snare.outputLevel[1]); st.Add(r.snare.outputLevel[0]);
+		}
+		const double us = std::chrono::duration<double, std::micro>(std::chrono::steady_clock::now() - t0).count() / (4 * beat);
+		// decay of a single hit: time until the level stays below -60 dB re its peak
+		uint32_t len = 0;
+		{
+			Rig& q = *new (mem) Rig;
+			q.snare.SetEngine(c.engine); Rig::Set(q.snare, 14, c.decay); Rig::Set(q.snare, 23, c.structure);
+			q.snare.Play(0, 0, 2, 1.0f, 1.0f);
+			float pk = 0.0f;
+			for (uint32_t s = 0; s < systemSampleRate * 20; ++s) {
+				q.snare.CalcOutput();
+				const float a = std::fabs(q.snare.outputLevel[0]);
+				pk = std::max(pk, a);
+				if (a > pk * 0.001f) len = s;
+			}
+		}
+		printf("  %-30s peak %+5.1f dBFS  rms %+5.1f dBFS  -60 dB after %6.0f ms  nan %llu  host %.3f us/sample\n", c.name,
+				st.PeakDb(), st.RmsDb(), 1000.0f * len / systemSampleRate, (unsigned long long)st.nan, us);
+		for (uint32_t s = 0; s < systemSampleRate / 2; ++s) wav.Add(0.0f, 0.0f);
+	}
+	wav.Write(dir + "/string_snare.wav");
+
+	// 2. Snare roll: 16ths through a minor pentatonic, 3 strings (tails overlap)
+	{
+		Rig& r = *new (mem) Rig;
+		r.snare.SetEngine(5);
+		Rig::Set(r.snare, 14, 0.55f);
+		Pots(0.5f, 0.5f, 0.3f);
+		ADC_array[ADC_SnareFilter] = static_cast<uint16_t>(0.55f * 65535.0f);
+		const int notes[] = {0, 3, 5, 7, 10, 12, 10, 7, 5, 3, 0, -2, 0, 3, 7, 12};
+		Wav roll; Stats st;
+		for (uint32_t step = 0; step < 32; ++step) {
+			r.snare.Play(0, 0, 0, step % 4 == 0 ? 1.0f : 0.7f, std::pow(2.0f, notes[step % 16] / 12.0f));
+			for (uint32_t s = 0; s < static_cast<uint32_t>(beat / 4); ++s) {
+				r.snare.CalcOutput();
+				roll.Add(r.snare.outputLevel[0], r.snare.outputLevel[1]); st.Add(r.snare.outputLevel[0]);
+			}
+		}
+		for (uint32_t s = 0; s < systemSampleRate; ++s) { r.snare.CalcOutput(); roll.Add(r.snare.outputLevel[0], r.snare.outputLevel[1]); }
+		roll.Write(dir + "/string_snare_roll.wav");
+		printf("  %-30s peak %+5.1f dBFS  rms %+5.1f dBFS  nan %llu\n", "roll (16ths, pentatonic)", st.PeakDb(), st.RmsDb(), (unsigned long long)st.nan);
+	}
+
+	// 3. Toms pluck: melody alone, then dub offbeat stabs after a deep kick through the master bus
+	printf("\nToms pluck engine (C3 at note 60):\n");
+	{
+		Rig& r = *new (mem) Rig;
+		r.toms.SetEngine(2);
+		Pots(0.5f, 0.5f, 0.3f);
+		const int notes[] = {0, 0, 12, 0, 7, 0, 10, 12, 3, 0, 15, 0, 7, 10, 12, 19};
+		Wav mel; Stats st;
+		auto t0 = std::chrono::steady_clock::now();
+		uint32_t n = 0;
+		for (uint32_t step = 0; step < 32; ++step) {
+			r.toms.Play(0, 0, 0, step % 2 == 0 ? 0.9f : 0.6f, std::pow(2.0f, (notes[step % 16] - 12) / 12.0f));
+			for (uint32_t s = 0; s < static_cast<uint32_t>(beat / 4); ++s, ++n) {
+				r.toms.CalcOutput();
+				mel.Add(r.toms.outputLevel[0], r.toms.outputLevel[1]); st.Add(r.toms.outputLevel[0]);
+			}
+		}
+		const double us = std::chrono::duration<double, std::micro>(std::chrono::steady_clock::now() - t0).count() / n;
+		for (uint32_t s = 0; s < systemSampleRate; ++s) { r.toms.CalcOutput(); mel.Add(r.toms.outputLevel[0], r.toms.outputLevel[1]); }
+		mel.Write(dir + "/pluck_melody.wav");
+		printf("  %-30s peak %+5.1f dBFS  rms %+5.1f dBFS  nan %llu  host %.3f us/sample\n", "melody (16ths)", st.PeakDb(), st.RmsDb(),
+				(unsigned long long)st.nan, us);
+	}
+	const std::pair<const char*, float> dubs[] = {{"pluck_dub_offbeat_124", 0.25f}, {"pluck_dub_metallic_124", 0.55f}};
+	for (const auto& v : dubs) {
+		Rig& r = *new (mem) Rig;
+		r.kick.SetEngine(1);
+		r.toms.SetEngine(2);
+		Rig::Set(r.toms, 19, 1.0f);									// follow: offbeat after every kick
+		Rig::Set(r.toms, 25, 0.7f);									// longer ring
+		Rig::Set(r.toms, 26, v.second);
+		r.hat.SetEngine(1);
+		Pots(0.3f, 0.45f, 0.25f);
+		const float sixteenth = beat / 4.0f;
+		voiceManager.sixteenth = sixteenth;
+		MasterBus bus; bus.Configure();
+		Wav wav2; Stats st, pl;
+		const int chord[] = {0, 0, 3, -2};								// note per bar (C, C, Eb, Bb)
+		for (uint32_t step = 0; step < 16 * 8; ++step) {
+			if (step % 16 == 0) r.toms.Play(0, 0, 0, 0.35f, std::pow(2.0f, chord[(step / 16) % 4] / 12.0f));	// sets the note (soft)
+			if (step % 4 == 0) r.kick.Play(0, 0, 0, 1.0f, 1.0f);
+			if (step % 4 == 2) r.hat.Play(0, 2, 3, 0.5f, 1.0f);
+			for (uint32_t s = 0; s < static_cast<uint32_t>(sixteenth); ++s) {
+				float k[2], d[2], o[2];
+				Tick(r, k, d);
+				bus.Process(k, d, o);
+				wav2.Add(o[0], o[1]); st.Add(o[0]); pl.Add(r.toms.outputLevel[0]);
+			}
+		}
+		wav2.Write(dir + "/" + v.first + ".wav");
+		printf("  %-30s mix peak %+5.1f rms %+5.1f dBFS | pluck alone peak %+5.1f rms %+5.1f dBFS  nan %llu\n", v.first,
+				st.PeakDb(), st.RmsDb(), pl.PeakDb(), pl.RmsDb(), (unsigned long long)(st.nan + pl.nan));
+	}
+
+	// Decay time (single hit, accent 0.8) vs damping and brightness, pluck at 65 / 200 / 800 Hz
+	printf("\nString T60 (s) vs damping (rows) at brightness 0.1 / 0.5 / 1.0 and 65 / 200 / 800 Hz:\n");
+	for (const float damp : {0.0f, 0.2f, 0.4f, 0.5f, 0.6f, 0.7f, 0.8f, 0.9f}) {
+		printf("  damping %.2f:", damp);
+		for (const float br : {0.1f, 0.5f, 1.0f}) {
+			for (const float hz : {65.0f, 200.0f, 800.0f}) {
+				Rig& q = *new (mem) Rig;
+				q.toms.SetEngine(2);
+				Rig::Set(q.toms, 23, hz); Rig::Set(q.toms, 24, br); Rig::Set(q.toms, 25, damp); Rig::Set(q.toms, 27, 1.0f);
+				q.toms.Play(0, 0, 0, 0.8f, 1.0f);
+				float pk = 0.0f; uint32_t len = 0;
+				for (uint32_t s = 0; s < systemSampleRate * 30; ++s) {
+					q.toms.CalcOutput();
+					const float a = std::fabs(q.toms.outputLevel[0]);
+					pk = std::max(pk, a);
+					if (a > pk * 0.001f) len = s;
+				}
+				printf(" %5.1f", float(len) / systemSampleRate);
+			}
+			printf(" |");
+		}
+		printf("\n");
+	}
+
+	// 4. Robustness: random hits with random settings (incl. floods), and a same-pitch flood at maximum ring
+	printf("\nString robustness:\n");
+	for (uint32_t voice = 0; voice < 2; ++voice) {
+		Rig& r = *new (mem) Rig;
+		Pots(0.5f, 0.5f, 0.3f);
+		if (voice == 0) r.snare.SetEngine(5); else r.toms.SetEngine(2);
+		Stats st;
+		uint32_t next = 0, hits = 0;
+		for (uint32_t s = 0; s < systemSampleRate * 120; ++s) {
+			if (s == next) {
+				const uint32_t gap = Rnd01() < 0.2f ? 1 + HostRandom() % 100 : 1 + HostRandom() % 24000;		// 20 % floods
+				next = s + gap;
+				++hits;
+				const float pitch = std::pow(2.0f, (Rnd01() - 0.5f) * 10.0f);							// +-5 octaves
+				const float vel = Rnd01();
+				if (hits % 50 == 1) {
+					if (voice == 0) {
+						Rig::Set(r.snare, 14, Rnd01()); Rig::Set(r.snare, 23, Rnd01()); Rig::Set(r.snare, 24, 1.0f + std::floor(Rnd01() * 3.0f));
+						ADC_array[ADC_SnareFilter] = static_cast<uint16_t>(Rnd01() * 65535.0f);
+						ADC_array[ADC_SnareTuning] = static_cast<uint16_t>(Rnd01() * 65535.0f);
+					} else {
+						Rig::Set(r.toms, 24, Rnd01()); Rig::Set(r.toms, 25, Rnd01()); Rig::Set(r.toms, 26, Rnd01());
+						Rig::Set(r.toms, 27, 1.0f + std::floor(Rnd01() * 3.0f));
+					}
+				}
+				if (voice == 0) r.snare.Play(0, HostRandom() % 2, 2, vel, pitch); else r.toms.Play(0, 0, 0, vel, pitch);
+			}
+			float o;
+			if (voice == 0) { r.snare.CalcOutput(); o = r.snare.outputLevel[0]; } else { r.toms.CalcOutput(); o = r.toms.outputLevel[0]; }
+			st.Add(o);
+		}
+		printf("  %-6s random: %u hits in 120 s, peak %+5.1f dBFS, rms %+5.1f dBFS, nan %llu\n", voice == 0 ? "snare" : "pluck", hits,
+				st.PeakDb(), st.RmsDb(), (unsigned long long)st.nan);
+	}
+	for (const float pitchHz : {50.0f, 200.0f, 1000.0f}) {
+		Rig& r = *new (mem) Rig;
+		Pots(0.5f, 0.5f, 0.3f);
+		r.toms.SetEngine(2);
+		Rig::Set(r.toms, 23, pitchHz); Rig::Set(r.toms, 24, 1.0f); Rig::Set(r.toms, 25, 0.94f); Rig::Set(r.toms, 26, 0.25f);
+		Stats st, tail;
+		for (uint32_t s = 0; s < systemSampleRate * 8; ++s) {
+			if (s < systemSampleRate * 4 && s % 96 == 0) r.toms.Play(0, 0, 0, 1.0f, 1.0f);			// 500 hits/s, same pitch
+			r.toms.CalcOutput();
+			st.Add(r.toms.outputLevel[0]);
+			if (s > systemSampleRate * 7) tail.Add(r.toms.outputLevel[0]);
+		}
+		printf("  flood 500/s at %4.0f Hz, max ring: peak %+5.1f dBFS, rms %+5.1f dBFS, 3 s after: rms %+5.1f dBFS, nan %llu\n", pitchHz,
+				st.PeakDb(), st.RmsDb(), tail.RmsDb(), (unsigned long long)st.nan);
+	}
+}
+
 int main(int argc, char** argv)
 {
 	const std::string dir = argc > 1 ? argv[1] : ".";
 	if (argc > 2 && std::string(argv[2]) == "snaresustain") {
 		SnareSustainTest();
+		return 0;
+	}
+	if (argc > 2 && std::string(argv[2]) == "strings") {
+		StringTests(dir);
 		return 0;
 	}
 	if (argc > 3 && std::string(argv[2]) == "longrun") {

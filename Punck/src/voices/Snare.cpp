@@ -5,6 +5,9 @@
 #include "Dynamics.h"
 #include <cstring>
 
+// String engine delay lines (3 strings x 5 kB): AXI SRAM, cleared at start-up by KarplusString::Init
+static float __attribute__((section (".ram_d1_data"))) stringBuffer[KarplusString::bufferFloats];
+
 void Snare::Play(const uint8_t voice, const uint32_t noteOffset, uint32_t noteRange, const float velocity, const float pitch)
 {
 	playing = true;
@@ -62,6 +65,12 @@ void Snare::Play(const uint8_t voice, const uint32_t noteOffset, uint32_t noteRa
 		wireEnv = accent * std::clamp(config.modalWires, 0.0f, 2.0f);
 		wireCoef = dyn::DecayCoef(std::max(config.modalWireDecay, 5.0f) * (0.5f + decayEff));
 		wireBp.set_f_q<stmlib::FREQUENCY_FAST>(std::clamp(config.modalWireTone, 500.0f, 12000.0f) / systemSampleRate, 1.2f);
+	}
+
+	if (engine == karplus && stringReady) {
+		// Filter pot = brightness (Plaits: timbre squared), decay = damping
+		kString.Strike(f0, accent, std::clamp(config.stringStructure, 0.0f, 1.0f), snappy * snappy,
+				std::min(decayEff, maxStringDamping), static_cast<uint32_t>(config.stringStrings + 0.5f));
 	}
 }
 
@@ -151,6 +160,10 @@ void Snare::CalcOutput()
 		break;
 	}
 
+	case karplus:
+		out = config.stringLevel * stringGain * kString.Process();
+		break;
+
 	default:
 		break;
 	}
@@ -184,6 +197,7 @@ void Snare::SetEngine(const uint8_t e)
 		wireBp.Reset();
 		wireEnv = 0.0f;
 	}
+	kString.Silence();
 	rimEnv[0] = rimEnv[1] = clickEnv = 0.0f;
 	idle = false;
 	quietCount = 0;
@@ -213,6 +227,8 @@ void Snare::StoreConfig(uint8_t* buff, const uint32_t len)
 		modalDrum.Init();						// start-up only: builds tables with pow/cos (too slow for the audio interrupt)
 		wireBp.Init();
 		modalReady = true;
+		kString.Init(stringBuffer);
+		stringReady = true;
 	}
 	if (buff != nullptr && len <= sizeof(config)) {
 		memcpy(&config, buff, len);

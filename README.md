@@ -1,6 +1,25 @@
 # Punck
 ![Image](https://raw.githubusercontent.com/dchwebb/Punck/master/Graphics/Punck_Front.jpg "icon")
 
+> **modulove fork — branch `modulove-techno`.** Techno / dub / house oriented firmware for the Punck with
+> Mutable Instruments Plaits voices, a master bus and stability fixes. Based on upstream
+> [dchwebb/Punck](https://github.com/dchwebb/Punck) 06cc991; the original documentation follows below.
+>
+> - **24 engines**, switched by holding a voice button: kick 5, snare 7, hats 3, toms 6. **11 Mutable Instruments
+>   algorithms** (MIT): Plaits analog/synthetic bass drum and snare, two hi-hats, modal resonator, string
+>   (Karplus-Strong), FM, virtual analog and waveshaper — the synth engines through Plaits' low-pass gate.
+> - **Master bus**: glue compressor (kick bypasses it), anti-aliased clipper, input/output trim; **per-voice pan**;
+>   **Level pots** with an audio taper and a **drive zone** at the top of their travel.
+> - **MIDI**: BeatStep Pro drum map on ch 10, a chromatic channel per voice (11–16), kick-follow bass / stabs;
+>   **key & scale** for all tonal voices; settings **save themselves** (verified).
+> - **Tone Lab** (`WebEditor/tonelab.html`): engines, presets, master section and live meter over Web MIDI.
+> - **Stability**: fixes for pitch wobble after overloads, audio underruns, NaN blow-ups, USB console hangs and
+>   silently failing settings saves; host renderer and stress test in `tools/`.
+>
+> Docs: [User guide](docs/modulove/USER_GUIDE.md) · [Developer notes](docs/modulove/DEVELOPER.md) ·
+> [Changelog](docs/modulove/CHANGELOG.md). Flashing needs SWD (J6), see the developer notes.
+> Tested on one module (STM32H743 rev V); use at your own risk and keep a flash backup.
+
 Overview
 --------
 

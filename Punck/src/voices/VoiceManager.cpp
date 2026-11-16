@@ -333,9 +333,16 @@ void VoiceManager::NoteOn(MidiHandler::MidiNote midiNote, const uint8_t channel)
 
 void VoiceManager::CheckButtons()
 {
+	// Snapshot the input ports used by the switch, buttons and trigger inputs once per sample (B, C, D, E, G)
+	gpioIdr[1] = GPIOB->IDR;
+	gpioIdr[2] = GPIOC->IDR;
+	gpioIdr[3] = GPIOD->IDR;
+	gpioIdr[4] = GPIOE->IDR;
+	gpioIdr[6] = GPIOG->IDR;
+
 	// Check mode select switch. Options: Play note; MIDI learn; drum pattern selector
 	ButtonMode oldMode = buttonMode;
-	if ((GPIOE->IDR & GPIO_IDR_ID1) == 0) {				// PE1: MIDI Learn
+	if ((gpioIdr[4] & GPIO_IDR_ID1) == 0) {				// PE1: MIDI Learn
 		if (oldMode != ButtonMode::midiLearn) {
 			buttonMode = ButtonMode::midiLearn;
 			sequencer.playing = false;					// Stop active sequence
@@ -357,7 +364,7 @@ void VoiceManager::CheckButtons()
 				noteMapper[midiLearnVoice].pwmLed.Level(midiLearnCounter > 0 ? 1.0f : 0.0f);
 			}
 		}
-	} else if ((GPIOC->IDR & GPIO_IDR_ID6) == 0) {		// PC6: Sequence Select
+	} else if ((gpioIdr[2] & GPIO_IDR_ID6) == 0) {		// PC6: Sequence Select
 		buttonMode = ButtonMode::drumPattern;
 	} else  {
 		buttonMode = ButtonMode::playNote;
@@ -374,7 +381,7 @@ void VoiceManager::CheckButtons()
 	}
 
 	for (auto& note : noteMapper) {
-		NoteMapper::TriggerType triggerType = note.trigger.IsOn();
+		NoteMapper::TriggerType triggerType = note.trigger.IsOn(gpioIdr);
 		if (triggerType) {
 			if (!note.trigger.buttonOn) {
 				note.trigger.buttonOn = true;
@@ -386,11 +393,11 @@ void VoiceManager::CheckButtons()
 
 				} else if (buttonMode == ButtonMode::playNote || triggerType != NoteMapper::TriggerType::triggerBtn) {
 					// Trigger input only used to play notes; Trigger 2 currently only used for open hihat
-					note.drumVoice->Play(note.voiceIndex, triggerType == NoteMapper::TriggerType::trigger2 ? 128 : 0);
+					note.pendingPlay = (triggerType == NoteMapper::TriggerType::trigger2) ? 128 : 0;
 
 				} else if (buttonMode == ButtonMode::drumPattern) {
 					if (sequencer.IsEmpty(note.voice)) {
-						note.drumVoice->Play(note.voiceIndex, 0);		// No pattern stored on this button: play the sound instead
+						note.pendingPlay = 0;							// No pattern stored on this button: play the sound instead
 					} else {
 						sequencer.StartStop(note.voice);
 					}
@@ -402,6 +409,18 @@ void VoiceManager::CheckButtons()
 		CheckLongPress(note);
 	}
 
+	// Start at most one waiting hit per sample (round robin): simultaneous triggers on all inputs would otherwise set
+	// up every voice in the same sample and overrun it. The last of five simultaneous hits starts 4 samples (83 us) late.
+	for (uint32_t i = 0; i < Voice::count; ++i) {
+		const uint32_t v = (playTurn + i) % Voice::count;
+		NoteMapper& note = noteMapper[v];
+		if (note.pendingPlay >= 0) {
+			note.drumVoice->Play(note.voiceIndex, static_cast<uint32_t>(note.pendingPlay));
+			note.pendingPlay = -1;
+			playTurn = static_cast<uint8_t>((v + 1) % Voice::count);
+			break;
+		}
+	}
 }
 
 
@@ -429,7 +448,7 @@ void VoiceManager::CheckLongPress(NoteMapper& note)
 		return;
 	}
 	const uint32_t now = SysTickVal;
-	if (note.trigger.ButtonHeld()) {
+	if (note.trigger.ButtonHeld(gpioIdr)) {
 		if (!holding[v]) {
 			holding[v] = true;
 			holdFired[v] = false;

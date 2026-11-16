@@ -20,6 +20,7 @@ struct NoteMapper {
 	uint8_t midiLow;
 	uint8_t midiHigh;
 	uint8_t pitchChannel = 0;			// MIDI channel (1-16) on which the voice is played chromatically (0 = off)
+	int16_t pendingPlay = -1;			// hit from a trigger input / button waiting for its turn (CheckButtons: one hit set up per sample)
 
 	struct Trigger {
 		GPIO_TypeDef* btnGpioBank;
@@ -32,14 +33,23 @@ struct NoteMapper {
 		uint8_t debounce = 0;
 		bool buttonOn;
 
-		bool ButtonHeld() {
+		bool ButtonHeld() {									// direct register read (main loop / console)
 			return btnGpioBank && (btnGpioBank->IDR & (1 << btnGpioPin)) == 0;
 		}
 
-		TriggerType IsOn()  {
-			TriggerType triggers = (TriggerType)((btnGpioBank && (btnGpioBank->IDR & (1 << btnGpioPin)) == 0) ? 1 : 0 |
-							   (trgGpioBank && (trgGpioBank->IDR & (1 << trgGpioPin)) == 0) ? 2 : 0 |
-							   (tr2GpioBank && (tr2GpioBank->IDR & (1 << tr2GpioPin)) == 0) ? 4 : 0);
+		// Audio interrupt: inputs come from a per-sample snapshot of the GPIO input registers (idr[port], A = 0 .. K = 10).
+		// One read per port instead of one per input: each GPIO register read costs ~40 CPU cycles from the interrupt.
+		static uint32_t Port(const GPIO_TypeDef* g) { return (reinterpret_cast<uintptr_t>(g) - GPIOA_BASE) >> 10; }
+		static bool Low(const uint32_t* idr, const GPIO_TypeDef* g, const uint8_t pin) {
+			return g != nullptr && (idr[Port(g)] & (1UL << pin)) == 0;
+		}
+		bool ButtonHeld(const uint32_t* idr) const { return Low(idr, btnGpioBank, btnGpioPin); }
+
+		TriggerType IsOn(const uint32_t* idr)  {
+			// Priority as upstream: button, then trigger 1, then trigger 2
+			const TriggerType triggers = Low(idr, btnGpioBank, btnGpioPin) ? triggerBtn :
+										 Low(idr, trgGpioBank, trgGpioPin) ? trigger1 :
+										 Low(idr, tr2GpioBank, tr2GpioPin) ? trigger2 : noTrigger;
 			if (triggers) {		// Fixme - probably need different debounce on each trigger
 				if (debounce == 0) {
 					debounce = 20;
@@ -201,6 +211,8 @@ private:
 	// debounced edge), with 30 ms tolerance for contact bounce, in Play and Sequence switch positions.
 	static constexpr uint32_t longPressMs = 700;
 	static constexpr uint32_t blinkOnMs = 150, blinkPeriodMs = 350;
+	uint32_t gpioIdr[11] = {};									// per-sample snapshot of the GPIO input registers (port A = 0 .. K = 10)
+	uint8_t playTurn = 0;										// round robin start for pending hits (one hit set up per sample)
 	bool holding[Voice::count] = {};
 	bool holdFired[Voice::count] = {};
 	uint32_t holdStart[Voice::count] = {};

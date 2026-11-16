@@ -26,8 +26,8 @@
 //
 // Modal synthesis voice with a mallet exciter (click -> LPF -> resonator), after Plaits' ModalVoice /
 // Resonator (taken from Rings). Modified for the Punck (modulove fork, same MIT licence):
-// - the per-mode filter coefficients are computed once per hit (Configure) instead of every block, so the
-//   voice can run one sample at a time inside the 48 kHz interrupt
+// - the per-mode filter coefficients are computed once per hit instead of every block, spread over a few samples
+//   (kModesPerSample) so a hit never overloads a single sample of the 48 kHz interrupt
 // - the stiffness table is computed at start-up from the same formula as plaits/resources/lookup_tables.py
 // - the number of modes is selectable (CPU vs. brightness)
 
@@ -116,21 +116,24 @@ class ModalDrum {
     float q = 500.0f * q_sqrt * q_sqrt;
     brightness *= 1.0f - structure * 0.3f;
     brightness *= 1.0f - damping * 0.3f;
-    const float q_loss = brightness * (2.0f - brightness) * 0.85f + 0.15f;
-    for (int i = 0; i < num_modes_; ++i) {
-      const float mode_frequency = std::min(harmonic * stretch_factor, 0.499f);
-      const float mode_attenuation = 1.0f - mode_frequency * 2.0f;
-      SetSvf(mode_frequency, 1.0f + mode_frequency * q, g_[i], r_plus_g_[i], h_[i]);
-      gain_[i] = amplitude_[i] * mode_attenuation;
-      stretch_factor += stiffness;
-      stiffness *= (stiffness < 0.0f) ? 0.93f : 0.98f;
-      harmonic += f0;
-      q *= q_loss;
-    }
+    // The mode coefficients are computed a few modes per sample in Process (kModesPerSample), so a hit costs no
+    // more than an ordinary sample; the strike pulse fires once all modes are set (16 modes: 4 samples, 83 us)
+    pending_pulse_ = pulse_;
+    pulse_ = 0.0f;
+    next_mode_ = 0;
+    stage_f0_ = f0;
+    stage_harmonic_ = harmonic;
+    stage_stretch_ = stretch_factor;
+    stage_stiffness_ = stiffness;
+    stage_q_ = q;
+    stage_q_loss_ = brightness * (2.0f - brightness) * 0.85f + 0.15f;
   }
 
   // One sample: in = extra excitation (e.g. noise), returns the resonator output
   inline float Process(float in) {
+    if (next_mode_ < num_modes_) {
+      ConfigureModes();
+    }
     // Exciter low pass
     const float e_in = pulse_ + in;
     pulse_ = 0.0f;
@@ -156,6 +159,27 @@ class ModalDrum {
   void set_num_modes(int n) { num_modes_ = std::clamp(n, 4, kMaxModes); }
 
  private:
+  static constexpr int kModesPerSample = 4;
+
+  void ConfigureModes() {
+    const int end = std::min(next_mode_ + kModesPerSample, num_modes_);
+    for (int i = next_mode_; i < end; ++i) {
+      const float mode_frequency = std::min(stage_harmonic_ * stage_stretch_, 0.499f);
+      const float mode_attenuation = 1.0f - mode_frequency * 2.0f;
+      SetSvf(mode_frequency, 1.0f + mode_frequency * stage_q_, g_[i], r_plus_g_[i], h_[i]);
+      gain_[i] = amplitude_[i] * mode_attenuation;
+      stage_stretch_ += stage_stiffness_;
+      stage_stiffness_ *= (stage_stiffness_ < 0.0f) ? 0.93f : 0.98f;
+      stage_harmonic_ += stage_f0_;
+      stage_q_ *= stage_q_loss_;
+    }
+    next_mode_ = end;
+    if (next_mode_ >= num_modes_) {
+      pulse_ = pending_pulse_;					// all modes ready: strike
+      pending_pulse_ = 0.0f;
+    }
+  }
+
   static void SetSvf(float f, float q, float& g, float& r_plus_g, float& h) {
     g = stmlib::OnePole::tan<stmlib::FREQUENCY_FAST>(f);
     const float r = 1.0f / q;
@@ -179,6 +203,10 @@ class ModalDrum {
   float stiffness_table_[66];
   float exciter_g_ = 0.1f, exciter_rpg_ = 1.0f, exciter_h_ = 1.0f, exciter_s1_ = 0.0f, exciter_s2_ = 0.0f;
   float pulse_ = 0.0f;
+  float pending_pulse_ = 0.0f;
+  int next_mode_ = kMaxModes;
+  float stage_f0_ = 0.0f, stage_harmonic_ = 0.0f, stage_stretch_ = 1.0f, stage_stiffness_ = 0.0f;
+  float stage_q_ = 1.0f, stage_q_loss_ = 1.0f;
 };
 
 }  // namespace plaits

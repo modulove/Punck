@@ -91,8 +91,10 @@ constexpr float adjOffset = 0.0f;
 constexpr float adjOutputScale = adjOutputScaleValue;
 void VoiceManager::Output()
 {
+	const uint32_t controlCycles = DWT->CYCCNT;			// trigger inputs, buttons, sequencer: includes the per-hit setup they start
 	CheckButtons();										// Handle buttons playing note or activating MIDI learn
 	sequencer.Play();
+	Profile(profControl, DWT->CYCCNT - controlCycles);
 
 /*
 	// Test code for calculating offsets and maximum levels before ADC distorts
@@ -199,12 +201,11 @@ void VoiceManager::Output()
 
 	for (auto& nm : noteMapper) {
 		if (nm.drumVoice != nullptr && nm.voiceIndex == 0) {			// If voiceIndex is > 0 drum voice has multiple channels (eg sampler)
-			nm.drumVoice->PlayQueued();			// MIDI notes will be queued from serial/usb interrupts to play in main I2S interrupt
-
 #if (TIMINGDEBUG)
 			uint32_t debugStart = TIM3->CNT;
 #endif
-			const uint32_t voiceCycles = DWT->CYCCNT;
+			const uint32_t voiceCycles = DWT->CYCCNT;			// voice profile includes the per-hit setup of queued notes
+			nm.drumVoice->PlayQueued();			// MIDI notes will be queued from serial/usb interrupts to play in main I2S interrupt
 			nm.drumVoice->CalcOutput();
 			Profile(nm.voice, DWT->CYCCNT - voiceCycles);
 #if (TIMINGDEBUG)

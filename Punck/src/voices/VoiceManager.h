@@ -150,8 +150,8 @@ public:
 	};
 	void GetMeter(Meter& m);					// Reads and resets the peak values
 
-	// Cycle profile per block (DWT counter): voices in Voice order, then reverb and master bus
-	static constexpr uint32_t profCount = Voice::count + 2, profReverb = Voice::count, profMaster = Voice::count + 1;
+	// Cycle profile per block (DWT counter): voices in Voice order, then reverb, master bus and control (triggers/buttons/sequencer)
+	static constexpr uint32_t profCount = Voice::count + 3, profReverb = Voice::count, profMaster = Voice::count + 1, profControl = Voice::count + 2;
 	float profAvg[profCount] = {};
 	volatile float profMax[profCount] = {};
 	void Profile(const uint32_t block, const uint32_t cycles) {

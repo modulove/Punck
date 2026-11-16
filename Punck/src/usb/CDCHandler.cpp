@@ -184,7 +184,7 @@ void CDCHandler::ProcessCommand()
 		voiceManager.GetMeter(m);
 		printf("CPU avg: %.1f%%  max: %.1f%%  underruns: %lu\r\n", m.cpuAvg, m.cpuMax, i2sUnderrun);
 		printf("Comp reduction max: %.1f dB  into clipper: %+.1f dB  output peak: %+.1f dBFS\r\n", m.reductionDb, m.clipDb, m.peakDb);
-		static constexpr const char* blocks[] = {"kick", "snare", "hats", "samples", "-", "toms", "claps", "reverb", "master"};
+		static constexpr const char* blocks[] = {"kick", "snare", "hats", "samples", "-", "toms", "claps", "reverb", "master", "trig"};
 		printf("Cycles avg/max per sample (budget 8333):");
 		for (uint32_t i = 0; i < VoiceManager::profCount; ++i) {
 			if (i != VoiceManager::Voice::samplerB) {

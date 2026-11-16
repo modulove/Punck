@@ -197,8 +197,9 @@ void VoiceManager::Output()
 
 	Profile(profMaster, DWT->CYCCNT - masterCycles);
 	const float outputScale = 2147483648.0f * adjOutputScale;
-	SPI2->TXDR = (int32_t)((combinedOutput[left] + adjOffset) *  outputScale);
-	SPI2->TXDR = (int32_t)((combinedOutput[right] + adjOffset) * outputScale);
+	// The frame goes out at the start of the next interrupt (SPI2_IRQHandler), straight after the I2S asked for it
+	nextOut[left]  = (int32_t)((combinedOutput[left] + adjOffset) *  outputScale);
+	nextOut[right] = (int32_t)((combinedOutput[right] + adjOffset) * outputScale);
 
 	for (auto& nm : noteMapper) {
 		if (nm.drumVoice != nullptr && nm.voiceIndex == 0) {			// If voiceIndex is > 0 drum voice has multiple channels (eg sampler)

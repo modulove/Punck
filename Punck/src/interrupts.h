@@ -25,6 +25,12 @@ void SPI2_IRQHandler()									// I2S Interrupt
 		return;
 	}
 
+	// modulove: write the frame prepared by the previous call first, then compute the next one. The FIFO gets its
+	// data within a few cycles of asking, so a sample may take up to nearly a full period before the I2S runs dry
+	// (upstream wrote after the triggers, reverb and master bus: 8-12 us into the interrupt). One sample latency.
+	SPI2->TXDR = voiceManager.nextOut[0];
+	SPI2->TXDR = voiceManager.nextOut[1];
+
 	const uint32_t cycleStart = DWT->CYCCNT;
 	voiceManager.Output();
 	{

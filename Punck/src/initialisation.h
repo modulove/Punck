@@ -90,3 +90,7 @@ void InitRNG();
 void InitPWMTimer();
 void DelayMS(uint32_t ms);
 void Reboot();
+void RestartI2S();
+
+// modulove: audio rate watchdog (main loop): interrupt calls per second, I2S restarts, last rate that caused one
+extern uint32_t audioRate, i2sRestarts, lastBadRate;

@@ -416,7 +416,12 @@ void InitI2S()
 	SPI2->I2SCFGR |= SPI_I2SCFGR_CHLEN;				// Channel Length = 32 bits
 
 	SPI2->CFG1 |= SPI_CFG1_UDRCFG_1;				// In the event of underrun resend last transmitted data frame
-	SPI2->CFG1 |= SPI_CFG1_FTHLV_1;					// FIFO threshold level. 0001: 2-data
+	// modulove: FIFO threshold 0001 = 2-data packet = one stereo frame, matching the two TXDR writes per interrupt.
+	// Upstream set FTHLV_1 (0010 = 3-data packet, the comment said 2-data): the interrupt then came with only one word
+	// left in the FIFO (10 us before an underrun), and after overloads it could settle into a rhythm with extra
+	// interrupts and words written into a full FIFO - measured 68,000 interrupts/s instead of 48,000: all voices
+	// played ~6 semitones high and drifted with the load (the 'wobbly pitch').
+	SPI2->CFG1 |= SPI_CFG1_FTHLV_0;
 
 	/* I2S Clock
 	000: pll1_q_ck clock selected as SPI/I2S1,2 and 3 kernel clock (default after reset)
@@ -493,6 +498,23 @@ void InitI2S()
 
 	SPI2->CR1 |= SPI_CR1_SPE;						// Enable I2S
 	SPI2->CR1 |= SPI_CR1_CSTART;					// Start I2S
+}
+
+
+// modulove: stop the I2S, empty its FIFO and start it again (rate watchdog in main: the audio interrupt was called at
+// a different rate than the I2S consumes frames). Clearing SPE flushes the FIFO; the codec sees a gap of a few frames.
+void RestartI2S()
+{
+	NVIC_DisableIRQ(SPI2_IRQn);
+	SPI2->CR1 |= SPI_CR1_CSUSP;
+	for (uint32_t i = 0; i < 200000 && (SPI2->SR & SPI_SR_SUSP) == 0; ++i) {}
+	SPI2->CR1 &= ~SPI_CR1_SPE;
+	SPI2->IFCR = SPI_IFCR_EOTC | SPI_IFCR_TXTFC | SPI_IFCR_UDRC | SPI_IFCR_OVRC | SPI_IFCR_CRCEC | SPI_IFCR_TIFREC |
+				 SPI_IFCR_MODFC | SPI_IFCR_TSERFC | SPI_IFCR_SUSPC;
+	SPI2->CR1 |= SPI_CR1_SPE;
+	SPI2->CR1 |= SPI_CR1_CSTART;
+	NVIC_ClearPendingIRQ(SPI2_IRQn);
+	NVIC_EnableIRQ(SPI2_IRQn);
 }
 
 

@@ -98,6 +98,7 @@ public:
 	void MidiClock();											// MIDI clock tick (24 ppqn)
 	float SixteenthSamples();									// Tempo for synced effects: MIDI clock > sequencer > kick interval
 	void Output();
+	int32_t nextOut[2] = {};								// frame computed by Output, written to the I2S at the next interrupt
 	void CheckButtons();
 	void StartOneHit();
 	void IdleTasks();

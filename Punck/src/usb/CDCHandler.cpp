@@ -211,6 +211,11 @@ void CDCHandler::ProcessCommand()
 		voiceManager.GetMeter(m);
 		printf("CPU avg: %.1f%%  max: %.1f%%  underruns: %lu  uptime: %lu s  crashes: %lu\r\n", m.cpuAvg, m.cpuMax, i2sUnderrun,
 				SysTickVal / 1000, crashRecord.count);
+		printf("Audio rate: %lu/s (48000)  I2S restarts: %lu%s\r\n", audioRate, i2sRestarts,
+				i2sRestarts ? "  <- rate watchdog fired" : "");
+		if (i2sRestarts) {
+			printf("Last bad rate: %lu/s\r\n", lastBadRate);
+		}
 		printf("Comp reduction max: %.1f dB  into clipper: %+.1f dB  output peak: %+.1f dBFS\r\n", m.reductionDb, m.clipDb, m.peakDb);
 		static constexpr const char* blocks[] = {"kick", "snare", "hats", "samples", "-", "toms", "claps", "reverb", "master", "trig"};
 		printf("Cycles avg/max per sample (budget 8333):");

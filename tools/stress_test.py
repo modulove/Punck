@@ -1,12 +1,15 @@
 #!/usr/bin/env python3
 """
-Brute force stress test for the Punck firmware: every engine combination under hard trigger scenarios, for hours.
+Brute force stress test for the Punck firmware: every engine combination with randomised Tone Lab parameters under
+hard trigger scenarios, for hours.
 
-  python tools/stress_test.py [--hours 4] [--scenario-secs 3.5] [--seed 1] [--no-record] [--elf build/Punck.elf]
+  python tools/stress_test.py [--hours 4] [--scenario-secs 3.5] [--seed 1] [--no-random] [--no-record]
+  python tools/stress_test.py --restore build/stress/<run>      put the settings saved at the start of a run back
 
 Per pass, all 150 engine combinations (kick 5 x snare 5 x hats 3 x toms/bass 2) run in shuffled order. For each
-combination the engines are set over the console, then these scenarios play over USB MIDI (the module's own
-trigger inputs can keep running from the modular on top - that is the intended worst case):
+combination the engines are set over the console and the parameters are randomised (below), then these scenarios
+play over USB MIDI (no MIDI cable needed; the module's own trigger inputs can keep running from the modular on top -
+that is the intended worst case):
 
   unison     all seven voices on the same 16th at 175 BPM, full velocity
   rolls      every voice rolling at its own rate (20-60 hits/s), random velocity
@@ -16,52 +19,138 @@ trigger inputs can keep running from the modular on top - that is the intended w
   switching  unison groove plus random engine switches and console hits every 150-400 ms
   sparse     single quiet hits: idle states, stuck voices, autosave in the background
 
+Parameter randomisation (Tone Lab ranges from WebEditor/tonelab.html, so only values the Tone Lab can set):
+  25 % of the combinations keep the settings from the start of the run, 60 % get random values for about half of
+  the controls that matter for the active engines (voices, reverb, master bus, key & scale), 15 % get extremes
+  (each chosen control at its minimum or maximum). Every set is logged in params.jsonl (id in results.csv).
+  The settings from the start are saved in snapshot.json and restored at the end (also after Ctrl+C).
+
 After every scenario the console 'cpu' line is checked:
   UNDERRUN   audio interrupt missed a sample          CPU>95    a sample used more than 95 % of its time
   RESTART    uptime went back / fault count went up   BLOWUP    clipper input above +24 dB or nan / inf
   SILENT     output peak below -60 dBFS while hitting NOCONSOLE console stopped answering (SWD check follows)
-Results: build/stress/<start>/results.csv (one row per scenario), events.log, and the audio interface recorded in
-1-minute FLAC chunks (mono) for listening to flagged moments. Ctrl+C stops; the original engines are restored.
+  RATE       audio interrupt not at 48000/s (+-2 %)   I2SRESTART the firmware's rate watchdog restarted the I2S
+Results in build/stress/<start>/: results.csv, events.log, params.jsonl, snapshot.json and the audio interface
+recorded in 1-minute FLAC chunks (mono) for listening to flagged moments.
 """
 import argparse
 import datetime
 import glob
+import json
+import math
 import os
 import random
 import re
+import struct
 import subprocess
 import sys
-import threading
 import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import level_test as lt
+import punck_backup as pb
 
 import mido
-mido.set_backend("mido.backends.rtmidi")
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 ENGINES = {"kick": 5, "snare": 5, "hats": 3, "toms": 2}
 ENGINE_VOICE = {"kick": 1, "snare": 2, "hats": 3, "toms": 6}          # console engine:v,e voice numbers
 DRUM_CH = 9                                                           # MIDI channel 10 (zero based)
 SCENARIOS = ["unison", "rolls", "flams", "chromatic", "flood", "switching", "sparse"]
+VOICE_STRUCTS = {"Kick": 0, "Snare": 1, "HiHat": 2, "Toms": 5, "Claps": 6}   # SysEx voice numbers
+STRUCT_ENGINE = {"Kick": "kick", "Snare": "snare", "HiHat": "hats", "Toms": "toms"}
+INT_UNITS = {"int", "key", "scale", "tmode", "fx", "chans"}
+INT_FIELDS = {"compOn", "compKick", "clipMode", "fxMode", "modalModes", "diffuserCount", "mixerBaseDelay"}
 
 
 # ------------------------------------------------------------------------------------------------
-# Module access
+# Tone Lab model: struct layouts and control ranges, read from the web page so they stay in sync
+# ------------------------------------------------------------------------------------------------
+class ToneLab:
+    SR, LN2, LN1000 = 48000.0, math.log(2), math.log(0.001)
+
+    def __init__(self, path):
+        html = open(path, encoding="utf-8").read()
+        block = html[html.index("const STRUCTS"):]
+        block = block[:block.index("\n};") + 3]
+        self.layout = {}                                          # struct -> {field: (offset, count, type)}
+        self.size = {}
+        self.order = {}                                           # struct -> [(field, count, type)]
+        for m in re.finditer(r"(\w+):\s*\{\s*voice:\s*(-?\d+),\s*fields:\s*\[(.*?)\]\s*\}", block, re.S):
+            fields = [(n, int(c), t or "f") for n, c, t in re.findall(r'\["(\w+)",(\d+)(?:,"(\w)")?\]', m.group(3))]
+            pos, lay = 0, {}
+            for n, c, t in fields:
+                lay[n] = (pos, c, t)
+                pos += c if t == "b" else 4 * c
+            self.layout[m.group(1)], self.size[m.group(1)], self.order[m.group(1)] = lay, pos, fields
+        ui = html[html.index("const UI = {"):]
+        ui = ui[:ui.index("\n};") + 3]
+        self.controls = {}                                        # struct -> [control dict]
+        cur = None
+        for line in ui.splitlines():
+            m = re.match(r"\s*(\w+):\s*\{\s*title:", line)
+            if m:
+                cur = "Mix" if m.group(1) == "Key" else m.group(1)
+            for c in re.finditer(r'\["([^"]*)",\s*"(\w+)",\s*(\d+),\s*"(\w+)",\s*"([^"]*)",\s*(-?[\d.eE+-]+),\s*(-?[\d.eE+-]+),'
+                                 r'\s*"(\w+)"(?:,\s*\[([\d,\s]*)\])?\]', line):
+                field = c.group(2)
+                if field.startswith("_") or cur is None or field not in self.layout.get(cur, {}):
+                    continue                                      # macro controls (several fields) are skipped
+                eng = [int(x) for x in c.group(9).split(",")] if c.group(9) else None
+                self.controls.setdefault(cur, []).append(dict(label=c.group(1), field=field, idx=int(c.group(3)), conv=c.group(4),
+                                                              unit=c.group(5), lo=float(c.group(6)), hi=float(c.group(7)),
+                                                              scale=c.group(8), engines=eng))
+
+    def to_raw(self, conv, v):
+        sr = self.SR
+        if conv == "omega":
+            return v / (sr / 2)
+        if conv == "decay":
+            return math.exp(self.LN1000 / (sr * v / 1000))
+        if conv == "drop":
+            return math.exp(-v * self.LN2 / sr)
+        if conv == "rise":
+            return math.exp(v * self.LN2 / sr)
+        if conv == "attack":
+            return 1 / (sr / 1000 * v)
+        if conv == "pct":
+            return v / 100
+        if conv == "chans":
+            return [0, 4, 8][int(round(v))]
+        return v
+
+    def pick(self, rng, c, extreme):
+        lo, hi = c["lo"], c["hi"]
+        if extreme:
+            v = rng.choice((lo, hi))
+        elif c["scale"] == "log" and lo > 0 and hi > 0:
+            v = math.exp(rng.uniform(math.log(lo), math.log(hi)))
+        else:
+            v = rng.uniform(lo, hi)
+        if c["unit"] in INT_UNITS or c["field"] in INT_FIELDS:
+            v = round(v)
+        return v
+
+    def offset_of(self, struct_name, field, idx):
+        off, count, t = self.layout[struct_name][field]
+        return off + idx * (1 if t == "b" else 4) if idx < count else None
+
+    def mix_index(self, field, idx):
+        i = 0
+        for n, c, t in self.order["Mix"]:
+            if n == field:
+                return i + idx
+            i += c
+        return None
+
+
+# ------------------------------------------------------------------------------------------------
+# Module access: console (COM port, reconnecting) and USB MIDI (notes + SysEx through punck_backup)
 # ------------------------------------------------------------------------------------------------
 class Module:
-    """Console (COM port) with reconnect, plus the MIDI output."""
-
     def __init__(self, port, midi_hint, log):
-        self.port, self.log = port, log
-        self.con = None
-        names = mido.get_output_names()
-        match = [n for n in names if midi_hint.lower() in n.lower()]
-        if not match:
-            sys.exit(f"MIDI output with '{midi_hint}' not found in {names} (close the Tone Lab / Chrome if it holds the port)")
-        self.midi = mido.open_output(match[0])
-        self.lock = threading.Lock()
+        self.port, self.log, self.con, self.midi_hint = port, log, None, midi_hint
+        self.sx = pb.Punck(midi_hint)                             # opens the MIDI in and out port (exclusive on Windows)
 
     def cmd(self, c, wait=0.5, tries=3):
         for _ in range(tries):
@@ -82,20 +171,53 @@ class Module:
                 time.sleep(1.0)
         return None
 
+    def reopen_midi(self):
+        """After a module restart the USB MIDI device is new: the old port handles are dead."""
+        try:
+            self.sx.close()
+        except Exception:
+            pass
+        for _ in range(30):
+            try:
+                self.sx = pb.Punck(self.midi_hint)
+                return True
+            except BaseException:                                     # find_port raises SystemExit while the port is missing
+                time.sleep(1.0)
+        return False
+
+    def midi_call(self, fn):
+        try:
+            return fn()
+        except Exception as e:
+            self.log(f"MIDI error: {type(e).__name__} {e}; reopening the port")
+            self.reopen_midi()
+            return fn()
+
     def send(self, msg):
-        with self.lock:
-            self.midi.send(msg)
+        self.midi_call(lambda: self.sx.out.send(msg))
+
+    def read_struct(self, name):
+        return bytes(self.midi_call(lambda: self.sx.reverb_config() if name == "Reverb" else self.sx.voice_config(VOICE_STRUCTS[name])))
+
+    def write_struct(self, name, raw):
+        if name == "Reverb":
+            self.midi_call(lambda: self.sx.send([pb.CMD["SetReverbConfig"]] + pb.nibble_encode(raw)))
+        else:
+            self.midi_call(lambda: self.sx.send([pb.CMD["SetVoiceConfig"], VOICE_STRUCTS[name]] + pb.nibble_encode(raw)))
+
+    def read_mix(self):
+        t = self.cmd("mix", wait=0.8) or ""
+        vals = {}
+        for m in re.finditer(r"^\s*(\d+) .*?(-?[\d.]+)\s*$", t, re.M):
+            vals[int(m.group(1))] = float(m.group(2))
+        return vals
 
     def close(self):
-        try:
-            self.midi.close()
-        except Exception:
-            pass
-        try:
-            if self.con:
-                self.con.s.close()
-        except Exception:
-            pass
+        for f in (lambda: self.sx.close(), lambda: self.con and self.con.s.close()):
+            try:
+                f()
+            except Exception:
+                pass
 
 
 def parse_cpu(text):
@@ -112,6 +234,8 @@ def parse_cpu(text):
     m3 = re.search(r"budget \d+\):(.*)", text)
     r["cycles"] = m3.group(1).strip() if m3 else ""
     r["nan"] = bool(re.search(r"\bnan\b|\binf\b", text, re.I))
+    m4 = re.search(r"Audio rate: (\d+)/s \(48000\)\s+I2S restarts: (\d+)", text)            # firmware r13+
+    r["rate"], r["restarts"] = (int(m4.group(1)), int(m4.group(2))) if m4 else (None, None)
     return r
 
 
@@ -139,15 +263,92 @@ def set_engines(mod, combo):
 
 
 # ------------------------------------------------------------------------------------------------
+# Snapshot / restore of all settings, and the randomiser
+# ------------------------------------------------------------------------------------------------
+def take_snapshot(mod, tl, path):
+    snap = {"structs": {}, "mix": {}}
+    for name in list(VOICE_STRUCTS) + ["Reverb"]:
+        raw = mod.read_struct(name)
+        snap["structs"][name] = raw.hex()
+        if len(raw) != tl.size.get(name, -1):
+            snap.setdefault("size_mismatch", {})[name] = [len(raw), tl.size.get(name)]
+    snap["mix"] = mod.read_mix()
+    json.dump(snap, open(path, "w"), indent=1)
+    return snap
+
+
+def restore_snapshot(mod, snap, log):
+    for name, hexraw in snap["structs"].items():
+        mod.write_struct(name, bytes.fromhex(hexraw))             # also restores the engine stored in each config
+        time.sleep(0.1)
+    for i, v in sorted((int(k), v) for k, v in snap["mix"].items()):
+        mod.cmd(f"mix:{i},{v:.5f}", wait=0.12)
+    log(f"settings restored from snapshot ({len(snap['structs'])} configs, {len(snap['mix'])} mix values)")
+
+
+def randomise(mod, tl, rng, combo, snap, mismatch):
+    """Returns (mode, {struct: {field[idx]: value}}). Writes the new values to the module."""
+    r = rng.random()
+    mode = "snapshot" if r < 0.25 else ("random" if r < 0.85 else "extreme")
+    chosen = {}
+    if mode == "snapshot":
+        for name in list(VOICE_STRUCTS) + ["Reverb"]:
+            raw = bytearray(bytes.fromhex(snap["structs"][name]))
+            if name in STRUCT_ENGINE and "engine" in tl.layout[name]:
+                off = tl.layout[name]["engine"][0]
+                struct.pack_into("<f", raw, off, float(combo[STRUCT_ENGINE[name]] - 1))    # keep this combination's engine
+            mod.write_struct(name, bytes(raw))
+            time.sleep(0.05)
+        for i, v in snap["mix"].items():
+            mod.cmd(f"mix:{int(i)},{v:.5f}", wait=0.1)
+        return mode, chosen
+    extreme = mode == "extreme"
+    for name in list(VOICE_STRUCTS) + ["Reverb"]:
+        if name in mismatch:
+            continue                                              # layout differs from the Tone Lab: do not touch
+        raw = bytearray(mod.read_struct(name))
+        eng = combo[STRUCT_ENGINE[name]] - 1 if name in STRUCT_ENGINE else None
+        vals = {}
+        for c in tl.controls.get(name, []):
+            if c["engines"] is not None and eng is not None and eng not in c["engines"]:
+                continue                                          # control of an inactive engine
+            if rng.random() > 0.5:
+                continue
+            off = tl.offset_of(name, c["field"], c["idx"])
+            if off is None or off + 4 > len(raw):
+                continue
+            v = tl.pick(rng, c, extreme)
+            struct.pack_into("<f", raw, off, float(tl.to_raw(c["conv"], v)))
+            vals[f"{c['field']}[{c['idx']}]"] = v
+        if vals:
+            mod.write_struct(name, bytes(raw))
+            chosen[name] = vals
+            time.sleep(0.05)
+    mixvals = {}
+    for c in tl.controls.get("Mix", []):
+        if rng.random() > 0.4:
+            continue
+        i = tl.mix_index(c["field"], c["idx"])
+        if i is None:
+            continue
+        v = tl.pick(rng, c, extreme)
+        mod.cmd(f"mix:{i},{tl.to_raw(c['conv'], v):.5f}", wait=0.1)
+        mixvals[f"{c['field']}[{c['idx']}]"] = v
+    if mixvals:
+        chosen["Mix"] = mixvals
+    return mode, chosen
+
+
+# ------------------------------------------------------------------------------------------------
 # Scenario generators: lists of (time s, message or console command)
 # ------------------------------------------------------------------------------------------------
+VOICES = ["kick", "snare", "hats", "sampleA", "sampleB", "toms", "claps"]
+PITCH_CH = [10, 11, 12, 13, 14, 15]                                   # channels 11-16 (zero based)
+
+
 def drum_note(rng, voice):
     return {"kick": 36, "snare": rng.choice((37, 38)), "hats": rng.choice((42, 43, 44)), "sampleA": rng.choice((45, 46, 47)),
             "sampleB": rng.randint(48, 87), "toms": rng.choice((40, 41)), "claps": 39}[voice]
-
-
-VOICES = ["kick", "snare", "hats", "sampleA", "sampleB", "toms", "claps"]
-PITCH_CH = [10, 11, 12, 13, 14, 15]                                   # channels 11-16 (zero based)
 
 
 def note(ch, n, v):
@@ -236,7 +437,7 @@ def play_events(mod, events):
 # ------------------------------------------------------------------------------------------------
 # SWD check when the console is gone (only then: SWD polling during play is avoided otherwise)
 # ------------------------------------------------------------------------------------------------
-def swd_check(elf, log):
+def swd_check(elf):
     try:
         import swd
         nm = glob.glob(r"C:\ST\STM32CubeIDE_*\STM32CubeIDE\plugins\*gnu-tools-for-stm32*\tools\bin\arm-none-eabi-nm.exe")
@@ -245,7 +446,7 @@ def swd_check(elf, log):
         syms = {}
         for line in subprocess.run([nm[0], elf], capture_output=True, text=True).stdout.splitlines():
             p = line.split()
-            if len(p) == 3 and p[2] in ("SysTickVal", "i2sUnderrun"):
+            if len(p) == 3 and p[2] in ("SysTickVal",):
                 syms[p[2]] = int(p[0], 16)
         a = syms.get("SysTickVal")
         if a is None:
@@ -254,7 +455,8 @@ def swd_check(elf, log):
                               f"stm32h743.ap0 read_memory 0x{a:08x} 32 1", timeout=60)
         vals = [int(l.split()[0], 16) for l in out.splitlines() if re.match(r"^\s*0x[0-9a-f]+\s*$", l)]
         if len(vals) == 2:
-            return f"SWD: uptime {vals[0] / 1000:.1f} s -> {vals[1] / 1000:.1f} s ({'firmware running, USB down' if vals[1] > vals[0] else 'FIRMWARE STOPPED'})"
+            state = "firmware running, USB down" if vals[1] > vals[0] else "FIRMWARE STOPPED"
+            return f"SWD: uptime {vals[0] / 1000:.1f} s -> {vals[1] / 1000:.1f} s ({state})"
         return "SWD read failed: " + out[-200:].replace("\n", " ")
     except Exception as e:
         return f"SWD check error {e}"
@@ -270,8 +472,18 @@ def main():
     ap.add_argument("--midi", default="Punck")
     ap.add_argument("--elf", default=os.path.join(ROOT, "build", "Punck.elf"))
     ap.add_argument("--no-record", action="store_true")
+    ap.add_argument("--no-random", action="store_true", help="keep the current parameters (engines still change)")
     ap.add_argument("--combos", type=int, default=0, help="limit combinations per pass (0 = all 150)")
+    ap.add_argument("--restore", metavar="RUN_FOLDER", help="restore the settings saved at the start of that run, then exit")
     a = ap.parse_args()
+
+    if a.restore:
+        mod = Module(a.port, a.midi, print)
+        try:
+            restore_snapshot(mod, json.load(open(os.path.join(a.restore, "snapshot.json"))), print)
+        finally:
+            mod.close()
+        return
 
     out = os.path.join(ROOT, "build", "stress", datetime.datetime.now().strftime("%Y%m%d_%H%M%S"))
     os.makedirs(out, exist_ok=True)
@@ -282,13 +494,19 @@ def main():
         print(line, flush=True)
         evlog.write(line + "\n")
 
+    tl = ToneLab(os.path.join(ROOT, "WebEditor", "tonelab.html"))
     mod = Module(a.port, a.midi, log)
     original, switch = read_status(mod)
     if len(original) < 4:
         sys.exit("could not read the engines from 'status' (console?)")
     if "learn" in switch.lower():
         sys.exit("mode switch is on MIDI learn: notes would change the MIDI map. Move it to Play or Sequence.")
+    snap = take_snapshot(mod, tl, os.path.join(out, "snapshot.json"))
+    mismatch = set(snap.get("size_mismatch", {}))
     log(f"start: engines {original}, switch {switch}, results in {out}")
+    log(f"snapshot saved ({len(snap['structs'])} configs, {len(snap['mix'])} mix values)"
+        + (f"; layout differs from the Tone Lab, not randomised: {snap['size_mismatch']}" if mismatch else ""))
+    log(f"randomised controls: " + ", ".join(f"{k} {len(v)}" for k, v in tl.controls.items()))
     log("crash record: " + (mod.cmd("crash", wait=0.5) or "?").strip().replace("\r\n", " | "))
 
     rec = None
@@ -297,14 +515,16 @@ def main():
         if dev:
             rec = subprocess.Popen([lt.FFMPEG, "-hide_banner", "-loglevel", "error", "-f", "dshow", "-audio_buffer_size", "50",
                                     "-sample_rate", "48000", "-channels", "2", "-i", "audio=" + dev[0], "-ac", "1",
-                                    "-t", f"{a.hours * 3600 + 120:.0f}", "-c:a", "flac", "-f", "segment", "-segment_time", "60",
+                                    "-t", f"{a.hours * 3600 + 300:.0f}", "-c:a", "flac", "-f", "segment", "-segment_time", "60",
                                     "-strftime", "1", os.path.join(out, "seg_%H%M%S.flac")],
                                    stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=open(os.path.join(out, "ffmpeg.log"), "w"))
         else:
             log("audio interface not found: not recording")
 
     csv = open(os.path.join(out, "results.csv"), "w", buffering=1)
-    csv.write("time,pass,kick,snare,hats,toms,scenario,events,late_ms,cpu_avg,cpu_max,underruns,uptime_s,crashes,clip_db,peak_db,flags,cycles\n")
+    csv.write("time,pass,kick,snare,hats,toms,params_id,params_mode,scenario,events,late_ms,cpu_avg,cpu_max,underruns,uptime_s,"
+              "crashes,clip_db,peak_db,rate,i2s_restarts,flags,cycles\n")
+    plog = open(os.path.join(out, "params.jsonl"), "w", buffering=1)
 
     combos = [{"kick": k, "snare": s, "hats": h, "toms": t} for k in range(1, 6) for s in range(1, 6)
               for h in range(1, 4) for t in range(1, 3)]
@@ -312,9 +532,9 @@ def main():
     t_end = time.time() + a.hours * 3600
     last = parse_cpu(mod.cmd("cpu", wait=0.6))
     totals = {"scenarios": 0, "flags": {}}
-    worst = []
+    worst, restarts = [], []
     dead_since = None
-    pass_no = 0
+    pass_no, pid = 0, 0
     try:
         while time.time() < t_end:
             pass_no += 1
@@ -328,16 +548,23 @@ def main():
                     break
                 set_engines(mod, combo)
                 time.sleep(0.8)                                          # engine preview hits and LED blinks
+                pid += 1
+                mode, chosen = ("current", {})
+                if not a.no_random:
+                    try:
+                        mode, chosen = randomise(mod, tl, rng, combo, snap, mismatch)
+                    except Exception as e:
+                        log(f"randomise failed: {type(e).__name__} {e}")
+                plog.write(json.dumps({"id": pid, "pass": pass_no, "combo": combo, "mode": mode, "values": chosen}) + "\n")
                 mod.cmd("cpu", wait=0.5)                                 # reset the maxima
-                combo_flags = []
+                combo_flags, combo_max = [], 0.0
                 for sc in SCENARIOS:
                     events = gen_events(sc, a.scenario_secs, rng)
                     err, late = play_events(mod, events)
                     if sc == "switching":
                         set_engines(mod, combo)                          # back to this combination
                     time.sleep(0.25)                                     # let the tails ring into the meter
-                    text = mod.cmd("cpu", wait=0.6)
-                    r = parse_cpu(text)
+                    r = parse_cpu(mod.cmd("cpu", wait=0.6))
                     flags = []
                     if err:
                         flags.append("MIDIERR")
@@ -345,7 +572,7 @@ def main():
                         flags.append("NOCONSOLE")
                         dead_since = dead_since or time.time()
                         if time.time() - dead_since > 30:
-                            log(swd_check(a.elf, log))
+                            log(swd_check(a.elf))
                             dead_since = time.time()
                     else:
                         dead_since = None
@@ -357,6 +584,10 @@ def main():
                             flags.append(f"UNDERRUN+{r['under'] - last['under']}")
                         if r["max"] >= 95.0:
                             flags.append("CPU>95")
+                        if r["rate"] is not None and abs(r["rate"] - 48000) > 960:
+                            flags.append(f"RATE{r['rate']}")
+                        if last and r["restarts"] is not None and last.get("restarts") is not None and r["restarts"] > last["restarts"]:
+                            flags.append(f"I2SRESTART+{r['restarts'] - last['restarts']}")
                         clip = to_float(r["clip_db"])
                         if r["nan"] or (clip is not None and clip > 24.0):
                             flags.append("BLOWUP")
@@ -365,36 +596,41 @@ def main():
                             flags.append("SILENT")
                         if "RESTART" in flags or "FAULT" in flags:
                             log("crash record: " + (mod.cmd("crash", wait=0.5) or "?").strip().replace("\r\n", " | "))
+                            restarts.append(time.time())
+                            if len([t for t in restarts if time.time() - t < 120]) >= 2:
+                                log("two restarts within 2 minutes: restoring the snapshot settings (boot loop protection)")
+                                restore_snapshot(mod, snap, log)
                         last = r
+                        combo_max = max(combo_max, r["max"])
+                        worst.append((r["max"], combo, sc, pid))
                     totals["scenarios"] += 1
                     for f in flags:
                         k = f.split("+")[0]
                         totals["flags"][k] = totals["flags"].get(k, 0) + 1
                     rr = r or {}
                     csv.write(f"{datetime.datetime.now():%H:%M:%S},{pass_no},{combo['kick']},{combo['snare']},{combo['hats']},{combo['toms']},"
-                              f"{sc},{len(events)},{late * 1000:.1f},{rr.get('avg', '')},{rr.get('max', '')},{rr.get('under', '')},"
-                              f"{rr.get('uptime', '')},{rr.get('crashes', '')},{rr.get('clip_db', '')},{rr.get('peak_db', '')},"
+                              f"{pid},{mode},{sc},{len(events)},{late * 1000:.1f},{rr.get('avg', '')},{rr.get('max', '')},{rr.get('under', '')},"
+                              f"{rr.get('uptime', '')},{rr.get('crashes', '')},{rr.get('clip_db', '')},{rr.get('peak_db', '')},{rr.get('rate', '')},{rr.get('restarts', '')},"
                               f"{' '.join(flags)},{rr.get('cycles', '').replace(',', ' ')}\n")
-                    if r:
-                        worst.append((r["max"], combo, sc))
                     if flags:
                         combo_flags.append(f"{sc}:{'/'.join(flags)}")
-                        log(f"  FLAG {combo} {sc}: {' '.join(flags)}  cpu {rr.get('avg')}/{rr.get('max')}%  {rr.get('cycles', '')}")
-                cm = max((w[0] for w in worst[-len(SCENARIOS):]), default=0)
-                log(f"[{pass_no}.{ci + 1:03d}] k{combo['kick']} s{combo['snare']} h{combo['hats']} t{combo['toms']}  peak cpu {cm:.0f}%"
-                    + (f"  flags: {', '.join(combo_flags)}" if combo_flags else "  ok"))
+                        log(f"  FLAG {combo} params {pid} ({mode}) {sc}: {' '.join(flags)}  cpu {rr.get('avg')}/{rr.get('max')}%  "
+                            f"{rr.get('cycles', '')}")
+                log(f"[{pass_no}.{ci + 1:03d}] k{combo['kick']} s{combo['snare']} h{combo['hats']} t{combo['toms']} params {pid} {mode:8s} "
+                    f"peak cpu {combo_max:.0f}%" + (f"  flags: {', '.join(combo_flags)}" if combo_flags else "  ok"))
     except KeyboardInterrupt:
         log("stopped by user")
     finally:
         try:
+            restore_snapshot(mod, snap, log)
             set_engines(mod, original)
             log(f"engines restored to {original}")
         except Exception as e:
-            log(f"could not restore engines: {e}")
+            log(f"could not restore: {e}  ->  run: python tools/stress_test.py --restore {out}")
         worst.sort(key=lambda w: -w[0])
         log(f"summary: {totals['scenarios']} scenarios, flags {totals['flags'] or 'none'}")
-        for m, combo, sc in worst[:10]:
-            log(f"  highest CPU {m:.1f}%  {combo} {sc}")
+        for m, combo, sc, p in worst[:10]:
+            log(f"  highest CPU {m:.1f}%  {combo} {sc} params {p}")
         if rec:
             rec.terminate()
         mod.close()

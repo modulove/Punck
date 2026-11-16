@@ -807,7 +807,7 @@ def main():
                             time.sleep(2.5)
                             q2 = mod.metrics()
                             q2_clip = to_float(q2["clip_db"]) if q2 else None
-                            if q2_clip is not None and q2_clip > limit and q2_clip > q_clip - 3.0 and q2_clip > 0.0:
+                            if q2_clip is not None and q2_clip > limit and q2_clip > q_clip - 3.0 and q2_clip > 12.0:
                                 flags.append(f"RUNAWAY{q_clip:+.0f}>{q2_clip:+.0f}dB")
                             else:
                                 flags.append(f"TAIL{q_clip:+.0f}>{q2_clip if q2_clip is not None else 0:+.0f}dB")

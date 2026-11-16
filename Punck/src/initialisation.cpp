@@ -23,10 +23,16 @@
 
 uint32_t cpuClockMHz = 400;
 
+// modulove: 480 MHz is opt-in. r21 (480 MHz chosen from DBGMCU REV_ID at boot) did not start standalone in the case
+// (no USB, no debugger attached) - until that is understood the default is 400 MHz and DBGMCU is not read at all.
+#ifndef CPU_480MHZ
+#define CPU_480MHZ 0
+#endif
+
 
 void InitClocks()
 {
-	const bool revV = (DBGMCU->IDCODE >> 16) == 0x2003;			// revision V: VOS0 and 480 MHz allowed
+	const bool revV = CPU_480MHZ && (DBGMCU->IDCODE >> 16) == 0x2003;	// revision V: VOS0 and 480 MHz allowed
 	cpuClockMHz = revV ? 480 : 400;
 
 	RCC->APB4ENR |= RCC_APB4ENR_SYSCFGEN;			// Enable System configuration controller clock

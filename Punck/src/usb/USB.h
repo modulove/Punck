@@ -98,7 +98,9 @@ private:
 	std::array<USBHandler*, 4>classesByInterface;		// Lookup tables to get appropriate class handlers (set in handler constructor)
 	std::array<USBHandler*, 4>classByEP;
 	EP0State ep0State;
-	bool transmitting;
+	// modulove: one flag per IN endpoint (upstream had one shared flag: a mass storage or MIDI completion cleared it
+	// while a console transfer was still running, the next console line was started over it and the endpoint hung)
+	volatile bool transmitting[8] = {};
 	usbRequest req;
 
 	uint8_t stringDescr[128];

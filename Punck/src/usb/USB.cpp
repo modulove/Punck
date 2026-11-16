@@ -198,8 +198,8 @@ void USB::InterruptHandler()					// In Drivers\STM32F4xx_HAL_Driver\Src\stm32f4x
 							EP0OutStart();		// modulove: status stage (zero length IN) done: ready for the next SETUP
 						}
 					} else {
+						transmitting[epnum] = false;	// before DataIn: it may start a follow-up zero length packet (sets it again)
 						classByEP[epnum]->DataIn();
-						transmitting = false;
 					}
 				}
 
@@ -306,6 +306,9 @@ void USB::InterruptHandler()					// In Drivers\STM32F4xx_HAL_Driver\Src\stm32f4x
 			USBx_OUTEP(0U)->DOEPTSIZ = (1U << 19) | (3U * 8U) | USB_OTG_DOEPTSIZ_STUPCNT;
 		}
 
+		for (auto& t : transmitting) {
+			t = false;							// modulove: transfers in progress are gone after a bus reset
+		}
 		USB_OTG_FS->GINTSTS &= USB_OTG_GINTSTS_USBRST;
 	}
 
@@ -748,6 +751,9 @@ void USB::EPStartXfer(const Direction direction, uint8_t endpoint, uint32_t xfer
 	if (direction == Direction::in) {
 
 		endpoint = endpoint & EP_ADDR_MASK;					// Strip out 0x80 if endpoint passed eg as 0x81
+		if (endpoint != 0) {
+			transmitting[endpoint] = true;					// modulove: set before the endpoint is enabled (cleared on XFRC)
+		}
 
 		if (endpoint == 0 && xfer_len > ep_maxPacket) {		// If the transfer is larger than the maximum packet size send the maximum size and use the remaining flag to trigger a second send
 			ep0.inBuffRem = xfer_len - ep_maxPacket;
@@ -864,13 +870,13 @@ void USB::ResumeEndpoint(USBHandler& handler)
 size_t USB::SendData(const uint8_t* data, const uint16_t len, uint8_t endpoint)
 {
 	endpoint &= EP_ADDR_MASK;
-	if (devState == DeviceState::Configured && !transmitting) {
-		transmitting = true;
+	// modulove: busy check per endpoint, and no change to the EP0 state (upstream set ep0State = DataIn for every
+	// endpoint, which made the next EP0 status completion look like the end of a control read)
+	if (devState == DeviceState::Configured && !transmitting[endpoint]) {
 		classByEP[endpoint]->inBuff = data;
 		classByEP[endpoint]->inBuffSize = len;
 		classByEP[endpoint]->inBuffCount = 0;
-		ep0State = EP0State::DataIn;
-		EPStartXfer(Direction::in, endpoint, len);
+		EPStartXfer(Direction::in, endpoint, len);			// sets transmitting[endpoint]
 		return len;
 	} else {
 		return 0;
@@ -884,7 +890,7 @@ void USB::WaitTxFree()
 	// modulove: console output (main loop only) waits up to 20 ms for the previous IN transfer. The old wait counted
 	// 10000 loops on a non-volatile flag, which the optimiser reduces to nothing, so most lines were dropped.
 	const uint32_t start = SysTickVal;
-	while (*static_cast<volatile bool*>(&transmitting) && devState == DeviceState::Configured && SysTickVal - start < 20) {
+	while (transmitting[CDC_In & EP_ADDR_MASK] && devState == DeviceState::Configured && SysTickVal - start < 20) {
 	}
 }
 

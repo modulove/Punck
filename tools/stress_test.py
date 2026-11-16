@@ -445,6 +445,30 @@ def restore_snapshot(mod, snap, log):
     log(f"settings restored from snapshot ({len(snap['structs'])} configs, {len(snap['mix'])} mix values)")
 
 
+def apply_values(mod, tl, combo, values, snap):
+    """Replays a logged parameter set: start from the snapshot (with this combination's engines), then the values."""
+    ctl = {(c["field"], c["idx"]): c for cs in tl.controls.values() for c in cs}
+    for name in list(VOICE_STRUCTS) + ["Reverb"]:
+        raw = bytearray(bytes.fromhex(snap["structs"][name]))
+        if name in STRUCT_ENGINE and "engine" in tl.layout[name]:
+            struct.pack_into("<f", raw, tl.layout[name]["engine"][0], float(combo[STRUCT_ENGINE[name]] - 1))
+        for k, v in values.get(name, {}).items():
+            f, i = k[:-1].split("[")
+            c = ctl.get((f, int(i)))
+            off = tl.offset_of(name, f, int(i))
+            if c is not None and off is not None:
+                struct.pack_into("<f", raw, off, float(tl.to_raw(c["conv"], v)))
+        mod.write_struct(name, bytes(raw))
+        time.sleep(0.05)
+    raw = bytearray(bytes.fromhex(snap["mix_raw"]))
+    for k, v in values.get("Mix", {}).items():
+        f, i = k[:-1].split("[")
+        c, idx = ctl.get((f, int(i))), tl.mix_index(f, int(i))
+        if c is not None and idx is not None:
+            struct.pack_into("<f", raw, 4 * idx, float(tl.to_raw(c["conv"], v)))
+    mod.write_mix_raw(bytes(raw))
+
+
 def randomise(mod, tl, rng, combo, snap, mismatch):
     """Returns (mode, {struct: {field[idx]: value}}). Writes the new values to the module."""
     r = rng.random()
@@ -641,6 +665,7 @@ def main():
     ap.add_argument("--combos", type=int, default=0, help="limit combinations per pass (0 = all 150)")
     ap.add_argument("--passes", type=int, default=0, help="stop after this many passes (0 = until --hours)")
     ap.add_argument("--restore", metavar="RUN_FOLDER", help="restore the settings saved at the start of that run, then exit")
+    ap.add_argument("--replay", metavar="RUN_FOLDER:ID,ID", help="re-run these logged parameter sets (engines and values) once")
     a = ap.parse_args()
 
     if a.restore:
@@ -683,6 +708,16 @@ def main():
         sys.exit("mode switch is on MIDI learn: notes would change the MIDI map. Move it to Play or Sequence.")
     snap = take_snapshot(mod, tl, os.path.join(out, "snapshot.json"))
     mismatch = set(snap.get("size_mismatch", {}))
+    replay = []
+    if a.replay:
+        folder, ids = a.replay.rsplit(":", 1)
+        recs = {r["id"]: r for r in (json.loads(l) for l in open(os.path.join(folder, "params.jsonl")))}
+        base = json.load(open(os.path.join(folder, "snapshot.json")))
+        for i in ids.split(","):
+            r = recs[int(i)]
+            r["snap"] = base if r["mode"] in ("snapshot", "random", "extreme") else snap
+            replay.append(r)
+        a.passes = 1
     mix_count = sum(c for _, c, _ in tl.order["Mix"])
     if len(snap["mix"]) < mix_count or len(snap["structs"]) < len(VOICE_STRUCTS) + 1:
         mod.close()
@@ -729,6 +764,8 @@ def main():
             rng.shuffle(order)
             if a.combos:
                 order = order[:a.combos]
+            if replay:
+                order = [r["combo"] for r in replay]
             log(f"pass {pass_no}: {len(order)} engine combinations")
             for ci, combo in enumerate(order):
                 if time.time() >= t_end:
@@ -737,7 +774,14 @@ def main():
                 time.sleep(0.8)                                          # engine preview hits and LED blinks
                 pid += 1
                 mode, chosen = ("current", {})
-                if not a.no_random:
+                if replay:
+                    rp = replay[ci]
+                    try:
+                        apply_values(mod, tl, combo, rp["values"], rp["snap"])
+                        mode, chosen = f"replay{rp['id']}", rp["values"]
+                    except Exception as e:
+                        log(f"replay failed: {type(e).__name__} {e}")
+                elif not a.no_random:
                     try:
                         mode, chosen = randomise(mod, tl, rng, combo, snap, mismatch)
                     except Exception as e:

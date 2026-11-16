@@ -9,6 +9,7 @@
 VoiceManager voiceManager;
 
 
+__attribute__((section(".flash_text")))			// modulove: start-up only, frees ITCM for the audio code
 VoiceManager::VoiceManager()
 {
 	for (uint8_t i = 0; i < Voice::count; ++i) {
@@ -681,6 +682,7 @@ uint32_t VoiceManager::GetMixConfig(uint8_t** buff)
 }
 
 
+__attribute__((section(".flash_text")))			// modulove: config (main loop), frees ITCM for the audio code
 void VoiceManager::StoreMixConfig(const uint8_t* buff, const uint32_t len)
 {
 	if (buff != nullptr) {

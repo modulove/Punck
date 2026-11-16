@@ -8,6 +8,9 @@
 
 using namespace stmlib;
 
+// Audio interrupt code into ITCM (the rest of this file runs from flash)
+#define PLAITS_ITCM __attribute__((section(".itcm_text.plaits")))
+
 namespace {
 	constexpr float outGains[PlaitsSynth::modelCount] = {0.6f, 0.8f, 0.7f};	// plaits::Voice::Init RegisterInstance out_gain
 
@@ -21,7 +24,7 @@ namespace {
 	// plaits::VirtualAnalogEngine::ComputeDetuning
 	const float intervals[5] = {0.0f, 7.01f, 12.01f, 19.01f, 24.01f};
 	inline float Squash(float x) { return x * x * (3.0f - 2.0f * x); }
-	float ComputeDetuning(float detune)
+	PLAITS_ITCM float ComputeDetuning(float detune)
 	{
 		detune = 2.05f * detune - 1.025f;
 		CONSTRAIN(detune, -1.0f, 1.0f);
@@ -34,7 +37,7 @@ namespace {
 	}
 
 	// plaits::WaveshapingEngine Tame
-	float Tame(float f0, const float harmonics, const float order)
+	PLAITS_ITCM float Tame(float f0, const float harmonics, const float order)
 	{
 		f0 *= harmonics;
 		const float max_f = 0.5f / order;
@@ -45,7 +48,7 @@ namespace {
 }
 
 
-float PlaitsSynth::NoteToF(float n)
+PLAITS_ITCM float PlaitsSynth::NoteToF(float n)
 {
 	// plaits::NoteToFrequency with the Punck's exact 48 kHz (Plaits itself runs at 47.872 kHz)
 	n -= 9.0f;
@@ -74,7 +77,7 @@ void PlaitsSynth::Silence()
 }
 
 
-void PlaitsSynth::Trigger(const float hz, const float accent, const Patch& p, const Model m)
+PLAITS_ITCM void PlaitsSynth::Trigger(const float hz, const float accent, const Patch& p, const Model m)
 {
 	model = m < modelCount ? m : fm;
 	patch = p;
@@ -88,7 +91,7 @@ void PlaitsSynth::Trigger(const float hz, const float accent, const Patch& p, co
 }
 
 
-void PlaitsSynth::ControlBlock()
+PLAITS_ITCM void PlaitsSynth::ControlBlock()
 {
 	// plaits::Voice::Render, per block (TRIG patched, LEVEL unpatched)
 	const float shortDecay = (200.0f * kBlock) / plaits::kSampleRate * SemitonesToRatio(-96.0f * patch.decay);
@@ -117,7 +120,7 @@ void PlaitsSynth::ControlBlock()
 }
 
 
-float PlaitsSynth::Process()
+PLAITS_ITCM float PlaitsSynth::Process()
 {
 	if (!active) {
 		return 0.0f;
@@ -149,7 +152,7 @@ float PlaitsSynth::Process()
 
 // ------------------------------------------------------------------------------------------------------------------
 // FM (plaits::FMEngine::Render)
-void PlaitsSynth::BlockFM(const float n, const float t, const float m, const float h)
+PLAITS_ITCM void PlaitsSynth::BlockFM(const float n, const float t, const float m, const float h)
 {
 	const float noteC = n - 24.0f;										// 4x oversampling
 	const float ratio = Interpolate(plaits::lut_fm_frequency_quantizer, h, 128.0f);
@@ -169,7 +172,7 @@ void PlaitsSynth::BlockFM(const float n, const float t, const float m, const flo
 }
 
 
-float PlaitsSynth::NextFM()
+PLAITS_ITCM float PlaitsSynth::NextFM()
 {
 	const float max_uint32 = 4294967296.0f;
 	const float amount = fmAmount.Next();
@@ -197,7 +200,7 @@ float PlaitsSynth::NextFM()
 
 // ------------------------------------------------------------------------------------------------------------------
 // VA (plaits::VirtualAnalogEngine::Render, VA_VARIANT 2, OUT)
-void PlaitsSynth::BlockVA(const float n, const float t, const float m, const float h)
+PLAITS_ITCM void PlaitsSynth::BlockVA(const float n, const float t, const float m, const float h)
 {
 	const float auxiliaryDetune = ComputeDetuning(h);
 	const float primary = NoteToF(n);
@@ -228,7 +231,7 @@ void PlaitsSynth::BlockVA(const float n, const float t, const float m, const flo
 }
 
 
-float PlaitsSynth::NextVA()
+PLAITS_ITCM float PlaitsSynth::NextVA()
 {
 	float sq, sw;
 	sync.Render(primaryF.Next(), squareSyncF.Next(), squarePw.Next(), 1.0f, &sq, 1);
@@ -239,7 +242,7 @@ float PlaitsSynth::NextVA()
 
 // ------------------------------------------------------------------------------------------------------------------
 // Fold (plaits::WaveshapingEngine::Render, OUT)
-void PlaitsSynth::BlockFold(const float n, const float t, const float m, const float h)
+PLAITS_ITCM void PlaitsSynth::BlockFold(const float n, const float t, const float m, const float h)
 {
 	const float f0 = NoteToF(n);
 	const float pw = m * 0.45f + 0.5f;
@@ -254,7 +257,7 @@ void PlaitsSynth::BlockFold(const float n, const float t, const float m, const f
 }
 
 
-float PlaitsSynth::NextFold()
+PLAITS_ITCM float PlaitsSynth::NextFold()
 {
 	float x;
 	slope.Render<plaits::OSCILLATOR_SHAPE_SLOPE>(slopeF.Next(), slopePw.Next(), &x, 1);

@@ -66,6 +66,7 @@ SECTIONS
     /* modulove: the audio interrupt code runs from ITCM (see .itcm_text below), everything else from flash */
     *(EXCLUDE_FILE(*voicemanager.o *kick.o *snare.o *hihat.o *toms.o *claps.o *samples.o *sequencer.o *main.o *bpfilter.o *karplusstring.o) .text)
     *(EXCLUDE_FILE(*voicemanager.o *kick.o *snare.o *hihat.o *toms.o *claps.o *samples.o *sequencer.o *main.o *bpfilter.o *karplusstring.o) .text*)
+    *(.flash_text)     /* modulove: start-up / config functions of the ITCM objects (not used by the audio interrupt) */
     *(.glue_7)         /* glue arm to thumb code */
     *(.glue_7t)        /* glue thumb to arm code */
     *(.eh_frame)

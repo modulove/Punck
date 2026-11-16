@@ -205,11 +205,16 @@ class Module:
         else:
             self.midi_call(lambda: self.sx.send([pb.CMD["SetVoiceConfig"], VOICE_STRUCTS[name]] + pb.nibble_encode(raw)))
 
-    def read_mix(self):
-        t = self.cmd("mix", wait=0.8) or ""
+    def read_mix(self, expected=29):
         vals = {}
-        for m in re.finditer(r"^\s*(\d+) .*?(-?[\d.]+)\s*$", t, re.M):
-            vals[int(m.group(1))] = float(m.group(2))
+        for _ in range(4):
+            t = self.cmd("mix", wait=1.0) or ""
+            vals = {}
+            for m in re.finditer(r"^\s*(\d+) .*?(-?[\d.]+)\s*$", t, re.M):
+                vals[int(m.group(1))] = float(m.group(2))
+            if len(vals) >= expected:
+                break
+            time.sleep(0.5)
         return vals
 
     def close(self):
@@ -247,13 +252,18 @@ def to_float(s, default=None):
 
 
 def read_status(mod):
-    t = mod.cmd("status", wait=0.6) or ""
-    eng = {}
-    for name, key in (("Kick", "kick"), ("Snare", "snare"), ("Hats", "hats"), ("Toms", "toms")):
-        m = re.search(rf"{name}\s+engine (\d+)", t)
-        if m:
-            eng[key] = int(m.group(1))
-    sw = re.search(r"Switch: (.+)", t)
+    eng, sw = {}, None
+    for _ in range(4):                                                # the first command after opening the port can get lost
+        t = mod.cmd("status", wait=0.8) or ""
+        eng = {}
+        for name, key in (("Kick", "kick"), ("Snare", "snare"), ("Hats", "hats"), ("Toms", "toms")):
+            m = re.search(rf"{name}\s+engine (\d+)", t)
+            if m:
+                eng[key] = int(m.group(1))
+        sw = re.search(r"Switch: (.+)", t)
+        if len(eng) == 4:
+            break
+        time.sleep(0.5)
     return eng, (sw.group(1).strip() if sw else "?")
 
 
@@ -503,6 +513,10 @@ def main():
         sys.exit("mode switch is on MIDI learn: notes would change the MIDI map. Move it to Play or Sequence.")
     snap = take_snapshot(mod, tl, os.path.join(out, "snapshot.json"))
     mismatch = set(snap.get("size_mismatch", {}))
+    mix_count = sum(c for _, c, _ in tl.order["Mix"])
+    if len(snap["mix"]) < mix_count or len(snap["structs"]) < len(VOICE_STRUCTS) + 1:
+        mod.close()
+        sys.exit(f"incomplete snapshot ({len(snap['mix'])} of {mix_count} mix values): not starting, nothing was changed")
     log(f"start: engines {original}, switch {switch}, results in {out}")
     log(f"snapshot saved ({len(snap['structs'])} configs, {len(snap['mix'])} mix values)"
         + (f"; layout differs from the Tone Lab, not randomised: {snap['size_mismatch']}" if mismatch else ""))

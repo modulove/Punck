@@ -28,7 +28,8 @@ Parameter randomisation (Tone Lab ranges from WebEditor/tonelab.html, so only va
 After every scenario the console 'cpu' line is checked:
   UNDERRUN   audio interrupt missed a sample          CPU>95    a sample used more than 95 % of its time
   RESTART    uptime went back / fault count went up   NAN       nan / inf in the master bus meter
-  RUNAWAY    a second after the notes the level is still 12 dB above the quiet level (self oscillation)
+  RUNAWAY    a second after the notes the level is still 12 dB above the quiet level and not falling over 2.5 s
+  TAIL       loud after a second but falling (long rumble / hat / reverb tails, info)
   HOT        clipper input above +24 dB while hitting (info: maximum gain settings reach it legitimately)
   SILENT     output peak below -60 dBFS while hitting NOCONSOLE console stopped answering (SWD check follows)
   RATE       audio interrupt not at 48000/s (+-2 %)   I2SRESTART the firmware's rate watchdog restarted the I2S
@@ -622,8 +623,17 @@ def main():
                         q_clip = to_float(q["clip_db"]) if q else None
                         if q and q["nan"]:
                             flags.append("NAN")
-                        if q_clip is not None and base_clip is not None and q_clip > max(base_clip, -20.0) + 12.0:
-                            flags.append(f"RUNAWAY{q_clip:+.0f}dB")
+                        limit = max(base_clip, -20.0) + 12.0 if base_clip is not None else None
+                        if q_clip is not None and limit is not None and q_clip > limit:
+                            # still loud after a second: long tail (rumble feedback, long hats) or self oscillation?
+                            # Runaway only if it does not fall by at least 3 dB over the next 2.5 s
+                            time.sleep(2.5)
+                            q2 = parse_cpu(mod.cmd("cpu", wait=0.6))
+                            q2_clip = to_float(q2["clip_db"]) if q2 else None
+                            if q2_clip is not None and q2_clip > limit and q2_clip > q_clip - 3.0:
+                                flags.append(f"RUNAWAY{q_clip:+.0f}>{q2_clip:+.0f}dB")
+                            else:
+                                flags.append(f"TAIL{q_clip:+.0f}>{q2_clip if q2_clip is not None else 0:+.0f}dB")
                         peak = to_float(r["peak_db"])
                         if sc != "sparse" and peak is not None and peak < -60.0:
                             flags.append("SILENT")

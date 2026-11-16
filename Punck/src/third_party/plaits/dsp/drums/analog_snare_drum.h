@@ -1,4 +1,5 @@
 // Copyright 2016 Emilie Gillet.
+// modulove (Punck fork, same MIT licence): coefficients cached between calls (Configure), see Render
 //
 // Author: Emilie Gillet (emilie.o.gillet@gmail.com)
 //
@@ -8,10 +9,10 @@
 // to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
 // copies of the Software, and to permit persons to whom the Software is
 // furnished to do so, subject to the following conditions:
-// 
+//
 // The above copyright notice and this permission notice shall be included in
 // all copies or substantial portions of the Software.
-// 
+//
 // THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
 // IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
 // FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
@@ -19,7 +20,7 @@
 // LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 // THE SOFTWARE.
-// 
+//
 // See http://creativecommons.org/licenses/MIT/ for more information.
 //
 // -----------------------------------------------------------------------------
@@ -62,8 +63,9 @@ class AnalogSnareDrum {
       oscillator_[i].Init();
     }
     noise_filter_.Init();
+    cache_f0_ = -1.0f;                // modulove: recompute the coefficients on the next Render
   }
-  
+
   void Render(
       bool sustain,
       bool trigger,
@@ -74,68 +76,35 @@ class AnalogSnareDrum {
       float snappy,
       float* out,
       size_t size) {
-    const float decay_xt = decay * (1.0f + decay * (decay - 1.0f));
     const int kTriggerPulseDuration = 1.0e-3f * kSampleRate;
     const float kPulseDecayTime = 0.1e-3f * kSampleRate;
-    const float q = 2000.0f * stmlib::SemitonesToRatio(decay_xt * 84.0f);
-    const float noise_envelope_decay = 1.0f - 0.0017f * \
-        stmlib::SemitonesToRatio(-decay * (50.0f + snappy * 10.0f));
-    const float exciter_leak = snappy * (2.0f - snappy) * 0.1f;
-    
-    snappy = snappy * 1.1f - 0.05f;
-    CONSTRAIN(snappy, 0.0f, 1.0f);
-    
+
+    // modulove: the Punck renders one sample per call; the coefficients below depend only on f0, tone, decay and
+    // snappy (constant during a hit), so they are computed only when one of them changes - the output is identical
+    if (f0 != cache_f0_ || tone != cache_tone_ || decay != cache_decay_ || snappy != cache_snappy_) {
+      cache_f0_ = f0;
+      cache_tone_ = tone;
+      cache_decay_ = decay;
+      cache_snappy_ = snappy;
+      Configure(f0, tone, decay, snappy);
+    }
+    const float noise_envelope_decay = noise_envelope_decay_;
+    const float exciter_leak = exciter_leak_;
+    snappy = snappy_;
+    const float* f = f_;
+    const float* gain = gain_;
+
     if (trigger) {
       pulse_remaining_samples_ = kTriggerPulseDuration;
       pulse_height_ = 3.0f + 7.0f * accent;
       noise_envelope_ = 2.0f;
     }
-    
-    static const float kModeFrequencies[kNumModes] = {
-        1.00f,
-        2.00f,
-        3.18f,
-        4.16f,
-        5.62f};
-    
-    float f[kNumModes];
-    float gain[kNumModes];
-    
-    for (int i = 0; i < kNumModes; ++i) {
-      f[i] = std::min(f0 * kModeFrequencies[i], 0.499f);
-      resonator_[i].set_f_q<stmlib::FREQUENCY_FAST>(
-          f[i],
-          1.0f + f[i] * (i == 0 ? q : q * 0.25f));
-    }
-    
-    if (tone < 0.666667f) {
-      // 808-style (2 modes)
-      tone *= 1.5f;
-      gain[0] = 1.5f + (1.0f - tone) * (1.0f - tone) * 4.5f;
-      gain[1] = 2.0f * tone + 0.15f;
-      std::fill(&gain[2], &gain[kNumModes], 0.0f);
-    } else {
-      // What the 808 could have been if there were extra modes!
-      tone = (tone - 0.666667f) * 3.0f;
-      gain[0] = 1.5f - tone * 0.5f;
-      gain[1] = 2.15f - tone * 0.7f;
-      for (int i = 2; i < kNumModes; ++i) {
-        gain[i] = tone;
-        tone *= tone;
-      }
-    }
 
-    float f_noise = f0 * 16.0f;
-    CONSTRAIN(f_noise, 0.0f, 0.499f);
-    noise_filter_.set_f_q<stmlib::FREQUENCY_FAST>(
-        f_noise, 1.0f + f_noise * 1.5f);
-        
-    
     stmlib::ParameterInterpolator sustain_gain(
         &sustain_gain_,
         accent * decay,
         size);
-    
+
     while (size--) {
       // Q45 / Q46
       float pulse = 0.0f;
@@ -147,12 +116,12 @@ class AnalogSnareDrum {
         pulse_ *= 1.0f - 1.0f / kPulseDecayTime;
         pulse = pulse_;
       }
-      
+
       float sustain_gain_value = sustain_gain.Next();
-      
+
       // R189 / C57 / R190 + C58 / C59 / R197 / R196 / IC14
       ONE_POLE(pulse_lp_, pulse, 0.75f);
-      
+
       float shell = 0.0f;
       for (int i = 0; i < kNumModes; ++i) {
         float excitation = i == 0
@@ -164,7 +133,7 @@ class AnalogSnareDrum {
                   excitation) + excitation * exciter_leak);
       }
       shell = stmlib::SoftClip(shell);
-      
+
       // C56 / R194 / Q48 / C54 / R188 / D54
       float noise = 2.0f * stmlib::Random::GetFloat() - 1.0f;
       if (noise < 0.0f) noise = 0.0f;
@@ -173,29 +142,82 @@ class AnalogSnareDrum {
 
       // C66 / R201 / C67 / R202 / R203 / Q49
       noise = noise_filter_.Process<stmlib::FILTER_MODE_BAND_PASS>(noise);
-      
+
       // IC13
       *out++ = noise + shell * (1.0f - snappy);
     }
   }
 
  private:
+  // modulove: the original per-call coefficient code, run only when f0 / tone / decay / snappy change
+  void Configure(float f0, float tone, float decay, float snappy) {
+    const float decay_xt = decay * (1.0f + decay * (decay - 1.0f));
+    const float q = 2000.0f * stmlib::SemitonesToRatio(decay_xt * 84.0f);
+    noise_envelope_decay_ = 1.0f - 0.0017f * \
+        stmlib::SemitonesToRatio(-decay * (50.0f + snappy * 10.0f));
+    exciter_leak_ = snappy * (2.0f - snappy) * 0.1f;
+
+    snappy = snappy * 1.1f - 0.05f;
+    CONSTRAIN(snappy, 0.0f, 1.0f);
+    snappy_ = snappy;
+
+    static const float kModeFrequencies[kNumModes] = {
+        1.00f,
+        2.00f,
+        3.18f,
+        4.16f,
+        5.62f};
+
+    for (int i = 0; i < kNumModes; ++i) {
+      f_[i] = std::min(f0 * kModeFrequencies[i], 0.499f);
+      resonator_[i].set_f_q<stmlib::FREQUENCY_FAST>(
+          f_[i],
+          1.0f + f_[i] * (i == 0 ? q : q * 0.25f));
+    }
+
+    if (tone < 0.666667f) {
+      // 808-style (2 modes)
+      tone *= 1.5f;
+      gain_[0] = 1.5f + (1.0f - tone) * (1.0f - tone) * 4.5f;
+      gain_[1] = 2.0f * tone + 0.15f;
+      std::fill(&gain_[2], &gain_[kNumModes], 0.0f);
+    } else {
+      // What the 808 could have been if there were extra modes!
+      tone = (tone - 0.666667f) * 3.0f;
+      gain_[0] = 1.5f - tone * 0.5f;
+      gain_[1] = 2.15f - tone * 0.7f;
+      for (int i = 2; i < kNumModes; ++i) {
+        gain_[i] = tone;
+        tone *= tone;
+      }
+    }
+
+    float f_noise = f0 * 16.0f;
+    CONSTRAIN(f_noise, 0.0f, 0.499f);
+    noise_filter_.set_f_q<stmlib::FREQUENCY_FAST>(
+        f_noise, 1.0f + f_noise * 1.5f);
+  }
+
+  float cache_f0_ = -1.0f, cache_tone_ = 0.0f, cache_decay_ = 0.0f, cache_snappy_ = 0.0f;
+  float noise_envelope_decay_ = 0.0f, exciter_leak_ = 0.0f, snappy_ = 0.0f;
+  float f_[kNumModes] = {}, gain_[kNumModes] = {};
+
   int pulse_remaining_samples_;
   float pulse_;
   float pulse_height_;
   float pulse_lp_;
   float noise_envelope_;
   float sustain_gain_;
-  
+
   stmlib::Svf resonator_[kNumModes];
   stmlib::Svf noise_filter_;
 
   // Replace the resonators in "free running" (sustain) mode.
   SineOscillator oscillator_[kNumModes];
-  
+
   DISALLOW_COPY_AND_ASSIGN(AnalogSnareDrum);
 };
-  
+
 }  // namespace plaits
 
 #endif  // PLAITS_DSP_DRUMS_ANALOG_SNARE_DRUM_H_

@@ -67,16 +67,23 @@ struct NoteMapper {
 	struct PWMLED {
 		volatile uint32_t* timerChannel;
 		uint32_t minLevel = 0;
+		uint32_t written = 0xFFFFFFFF;			// modulove: last value written to the timer (unchanged values are not rewritten)
 
 		uint32_t GetLevel()  {
 			return *timerChannel;
 		}
 		void Level(float brightness)  {
-			*timerChannel = std::max(minLevel, static_cast<uint32_t>(brightness * 4095.0f));
+			// modulove: every voice sets its LED every sample; a peripheral write costs bus cycles in the audio interrupt
+			const uint32_t v = std::max(minLevel, static_cast<uint32_t>(brightness * 4095.0f));
+			if (v != written) {
+				*timerChannel = v;
+				written = v;
+			}
 		}
 		void setMinLevel(uint32_t level) {		// Sets LED current/minimum brightness: to display currently playing sequence with dimly illuminated button
 			minLevel = level;
 			*timerChannel = level;
+			written = level;
 		}
 	} pwmLed;
 };

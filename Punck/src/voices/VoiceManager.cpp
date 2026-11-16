@@ -756,6 +756,7 @@ void VoiceManager::RestoreAllLeds()
 	for (auto& nm : voiceManager.noteMapper) {
 		if (nm.pwmLed.timerChannel) {
 			*nm.pwmLed.timerChannel = ledBackup[nm.voice];
+			nm.pwmLed.written = ledBackup[nm.voice];
 		}
 	}
 }

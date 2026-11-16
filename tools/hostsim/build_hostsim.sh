@@ -21,4 +21,4 @@ done
 	"$ROOT/tools/hostsim/render.cpp" "$OUT/src/Kick.cpp" "$OUT/src/Snare.cpp" "$OUT/src/HiHat.cpp" "$OUT/src/BPFilter.cpp" "$OUT/src/Toms.cpp" \
 	"$SRC/third_party/plaits/resources.cc" "$SRC/third_party/stmlib/dsp/units.cc" "$SRC/third_party/stmlib/utils/random.cc" \
 	-o "$OUT/render.exe"
-"$OUT/render.exe" "$OUT"
+[ -n "$NORUN" ] || "$OUT/render.exe" "$OUT"

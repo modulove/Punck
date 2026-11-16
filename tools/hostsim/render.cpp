@@ -12,6 +12,7 @@
 #include <string>
 #include <vector>
 #include <chrono>
+#include <new>
 
 volatile uint32_t SysTickVal = 1000;
 volatile uint16_t ADC_array[ADC1_BUFFER_LENGTH + ADC2_BUFFER_LENGTH];
@@ -148,6 +149,10 @@ struct Rig {
 static void Tick(Rig& r, float kickOut[2], float drums[2])
 {
 	voiceManager.UpdateDuck();
+	static uint32_t mainLoop = 0;
+	if ((++mainLoop & 31) == 0) {				// the module's main loop (IdleTasks) recalculates the filter coefficients
+		r.kick.UpdateFilter(); r.snare.UpdateFilter(); r.hat.UpdateFilter(); r.toms.UpdateFilter();
+	}
 	r.kick.CalcOutput(); r.snare.CalcOutput(); r.hat.CalcOutput(); r.toms.CalcOutput();
 	kickOut[0] = r.kick.outputLevel[0]; kickOut[1] = r.kick.outputLevel[1];
 	drums[0] = r.snare.outputLevel[0] + r.hat.outputLevel[0] + r.toms.outputLevel[0];
@@ -347,9 +352,115 @@ template<class F> static void ZoneStats(const char* label, F setup, const float 
 }
 
 
+// Long run: the module's current setup (kick deep, snare 808, classic hats, toms) plays a 124 BPM groove for hours
+// through the master bus. Every kick hit is compared cycle by cycle with the first one (any drift with run time
+// shows up as cents), hat hits by level; NaN / level per 10 minutes. Tests for state that degrades over time.
+static void LongRun(const std::string& dir, const double hours)
+{
+	// GARBAGE=0xNN: build the voices on memory filled with that byte (0xFF = every float NaN) to find state that is
+	// used before it is set. The module's voices sit in zeroed .bss, so the default is zero-filled memory.
+	alignas(Rig) static unsigned char rigMem[sizeof(Rig)];
+	const char* g = getenv("GARBAGE");
+	memset(rigMem, g ? static_cast<int>(strtol(g, nullptr, 0)) : 0, sizeof(rigMem));
+	Rig& r = *new (rigMem) Rig();
+	r.kick.SetEngine(1); r.snare.SetEngine(1); r.hat.SetEngine(0); r.toms.SetEngine(0);
+	Pots(0.851f, 0.511f, 0.817f);
+	ADC_array[ADC_SnareTuning] = static_cast<uint16_t>(0.523f * 65535.0f);
+	ADC_array[ADC_SnareFilter] = static_cast<uint16_t>(0.884f * 65535.0f);
+	MixConfig cfg; cfg.outTrim = 0.7f; cfg.inputTrim = -5.0f;
+	MasterBus bus; bus.m = cfg; bus.Configure();
+	const float sixteenth = 60.0f / 124.0f * systemSampleRate / 4.0f;
+	voiceManager.sixteenth = sixteenth;
+	const uint32_t sixteenthN = static_cast<uint32_t>(sixteenth);
+	const uint64_t steps = static_cast<uint64_t>(hours * 3600.0 * systemSampleRate / sixteenthN);
+
+	auto crossings = [](const std::vector<float>& x) {
+		std::vector<double> xs;
+		for (size_t i = 1; i < x.size() && xs.size() < 24; ++i) {
+			if (x[i - 1] < 0.0f && x[i] >= 0.0f) xs.push_back(i - 1 + x[i - 1] / (x[i - 1] - x[i]));
+		}
+		return xs;
+	};
+	std::vector<double> refKick; double refHat = 0.0;
+	double kickDevMax = 0.0, hatDevMax = 0.0, intervalDevMax = 0.0;
+	uint64_t nan = 0; float peak = 0.0f; double sum = 0.0; uint64_t n = 0;
+	uint64_t vNan[4] = {}; int64_t vFirst[4] = {-1, -1, -1, -1}; uint32_t vFirstStep[4] = {};
+	const char* vName[4] = {"kick", "snare", "hats", "toms"};
+	std::vector<float> kickBuf, hatBuf;
+	Wav startWav, endWav;
+	const uint64_t samplesPer10Min = static_cast<uint64_t>((hours < 0.2 ? 30.0 : 600.0) * systemSampleRate);
+	uint64_t sampleCount = 0;
+	printf("\nLong run %.1f h (kick deep, snare 808, hats classic, toms; pots as on the module):\n", hours);
+	auto t0 = std::chrono::steady_clock::now();
+	for (uint64_t step = 0; step < steps; ++step) {
+		const uint32_t i = step % 16;
+		const bool kickHit = (i % 4 == 0), hatHit = (i % 2 == 0);
+		if (kickHit) { r.kick.Play(0, 0, 0, 1.0f, 1.0f); kickBuf.clear(); }
+		if (hatHit) { r.hat.Play(0, 0, 3, 0.7f, 1.0f); hatBuf.clear(); }
+		if (i == 4 || i == 12) r.snare.Play(0, 0, 2, 0.8f, 1.0f);
+		if (i == 14 && (step / 16) % 4 == 3) r.toms.Play(0, 0, 1, 0.8f, 1.0f);
+		for (uint32_t s = 0; s < sixteenthN; ++s, ++sampleCount) {
+			float k[2], d[2], o[2];
+			Tick(r, k, d);
+			bus.Process(k, d, o);
+			const float vOut[4] = {r.kick.outputLevel[0], r.snare.outputLevel[0], r.hat.outputLevel[0], r.toms.outputLevel[0]};
+			for (int v = 0; v < 4; ++v) {
+				if (!std::isfinite(vOut[v])) {
+					if (vFirst[v] < 0) { vFirst[v] = sampleCount; vFirstStep[v] = i; }
+					++vNan[v];
+				}
+			}
+			if (kickBuf.size() < 4 * sixteenthN) kickBuf.push_back(k[0]);
+			if (hatBuf.size() < sixteenthN) hatBuf.push_back(r.hat.outputLevel[0]);
+			if (!std::isfinite(o[0]) || !std::isfinite(o[1])) ++nan;
+			peak = std::max(peak, std::max(std::abs(o[0]), std::abs(o[1])));
+			sum += o[0] * o[0]; ++n;
+			if (step < 16 * 8) startWav.Add(o[0], o[1]);
+			if (step >= steps - 16 * 8) endWav.Add(o[0], o[1]);
+			if ((sampleCount + 1) % samplesPer10Min == 0) {
+				printf("  %5.0f min  peak %+5.1f dBFS  rms %+5.1f dBFS  NaN %llu  kick vs first hit: timing %.3f smp, period %.3f cents  hats: %.2f dB\n",
+						(sampleCount + 1) / (60.0 * systemSampleRate), 20 * std::log10(std::max(peak, 1e-9f)), 10 * std::log10(std::max(sum / n, 1e-18)),
+						(unsigned long long)nan, kickDevMax, intervalDevMax, hatDevMax);
+				for (int v = 0; v < 4; ++v) {
+					if (vNan[v]) printf("      %s: %llu NaN samples, first at %.3f s (16th step %u)\n", vName[v], (unsigned long long)vNan[v],
+							vFirst[v] / static_cast<double>(systemSampleRate), vFirstStep[v]);
+				}
+				fflush(stdout);
+				peak = 0.0f; sum = 0.0; n = 0;
+			}
+		}
+		if (i % 4 == 3) {																// kick buffer complete (4 sixteenths)
+			const auto xs = crossings(kickBuf);
+			if (refKick.empty()) refKick = xs;
+			for (size_t c = 0; c < std::min(xs.size(), refKick.size()); ++c) {
+				kickDevMax = std::max(kickDevMax, std::abs(xs[c] - refKick[c]));		// zero crossing timing error in samples
+				if (c > 0) {
+					const double p0 = refKick[c] - refKick[c - 1], p1 = xs[c] - xs[c - 1];
+					intervalDevMax = std::max(intervalDevMax, std::abs(1200.0 * std::log2(p1 / p0)));
+				}
+			}
+		}
+		if (i % 2 == 1) {
+			double e = 0.0; for (float v : hatBuf) e += v * v;
+			const double db = 10.0 * std::log10(std::max(e, 1e-20));
+			if (refHat == 0.0) refHat = db;
+			hatDevMax = std::max(hatDevMax, std::abs(db - refHat));
+		}
+	}
+	const double secs = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
+	printf("  done in %.0f s host time; first and last 8 bars: longrun_start.wav / longrun_end.wav\n", secs);
+	startWav.Write(dir + "/longrun_start.wav");
+	endWav.Write(dir + "/longrun_end.wav");
+}
+
+
 int main(int argc, char** argv)
 {
 	const std::string dir = argc > 1 ? argv[1] : ".";
+	if (argc > 3 && std::string(argv[2]) == "longrun") {
+		LongRun(dir, atof(argv[3]));
+		return 0;
+	}
 	{
 		Rig r;
 		printf("Config sizes (bytes): kick %u snare %u hats %u toms %u\n", (unsigned)r.kick.ConfigSize(), (unsigned)r.snare.ConfigSize(),

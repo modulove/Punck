@@ -54,6 +54,7 @@ public:
 	void SendString(const char* s);
 	void SendString(const std::string s);
 	size_t SendString(const unsigned char* s, size_t len);
+	void WaitTxFree();								// console output: wait (max 20 ms) until the previous transfer is done
 	void PauseEndpoint(USBHandler& handler);
 	void ResumeEndpoint(USBHandler& handler);
 	uint32_t StringToUnicode(const std::string_view desc, uint8_t* unicode);

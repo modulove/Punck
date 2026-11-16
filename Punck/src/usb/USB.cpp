@@ -836,12 +836,20 @@ size_t USB::SendData(const uint8_t* data, const uint16_t len, uint8_t endpoint)
 }
 
 
+extern volatile uint32_t SysTickVal;
+void USB::WaitTxFree()
+{
+	// modulove: console output (main loop only) waits up to 20 ms for the previous IN transfer. The old wait counted
+	// 10000 loops on a non-volatile flag, which the optimiser reduces to nothing, so most lines were dropped.
+	const uint32_t start = SysTickVal;
+	while (*static_cast<volatile bool*>(&transmitting) && devState == DeviceState::Configured && SysTickVal - start < 20) {
+	}
+}
+
+
 void USB::SendString(const char* s)
 {
-	uint16_t counter = 0;
-	while (transmitting && counter < 10000) {
-		++counter;
-	}
+	WaitTxFree();
 	SendData((uint8_t*)s, strlen(s), CDC_In);
 }
 
@@ -854,10 +862,7 @@ void USB::SendString(const std::string s)
 
 size_t USB::SendString(const unsigned char* s, size_t len)
 {
-	uint16_t counter = 0;
-	while (transmitting && counter < 10000) {
-		++counter;
-	}
+	WaitTxFree();
 	return SendData((uint8_t*)s, len, CDC_In);
 }
 

@@ -26,7 +26,7 @@ void Snare::Play(const uint8_t voice, const uint32_t noteOffset, uint32_t noteRa
 			partialInc[i] = FreqToInc(freq * config.partialFreqOffset[i]);
 		}
 		noiseLevel = config.noiseInitLevel;
-		velocityScale = velocity * (static_cast<float>(ADC_array[ADC_SnareLevel]) / 32768.0f);
+		velocityScale = velocity * voiceManager.LevelGain(VoiceManager::potSnare);
 		// Note offset allows for longer sustained hits. modulove: the per-sample factor stays below 1 - decay +
 		// sustainRate went above 1 with long Tone Lab decays (> ~120 ms with MIDI note 38) and the level grew every
 		// sample until inf / nan (stress test 2026-11-16: +107 dB, then a silent module with DC on the output)
@@ -186,7 +186,7 @@ void Snare::CalcOutput()
 	}
 	trigger = false;
 
-	const float level = static_cast<float>(ADC_array[ADC_SnareLevel]) / 32768.0f;
+	const float level = voiceManager.LevelGain(VoiceManager::potSnare);
 	outputLevel[left] = outputLevel[right] = level * out;
 	ledEnv = std::max(std::abs(out), ledEnv * 0.9995f);
 	noteMapper->pwmLed.Level(std::min(ledEnv, 1.0f));
@@ -239,7 +239,7 @@ uint32_t Snare::SerialiseConfig(uint8_t** buff, const uint8_t voiceIndex)
 }
 
 
-void Snare::StoreConfig(uint8_t* buff, const uint32_t len)
+FLASH_CODE void Snare::StoreConfig(uint8_t* buff, const uint32_t len)
 {
 	if (buff == nullptr && !modalReady) {
 		modalDrum.Init();						// start-up only: builds tables with pow/cos (too slow for the audio interrupt)

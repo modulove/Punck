@@ -124,6 +124,7 @@ public:
 	}
 
 	void Reset() { x1 = 0.0f; }													// modulove: nan recovery
+	void Prime(const float x) { x1 = x; }										// start from a signal without a step
 
 private:
 	float x1 = 0.0f;

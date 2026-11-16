@@ -51,7 +51,7 @@ public:
 		float velocityScale;
 		volatile uint16_t* voiceADC;
 		volatile uint16_t* tuningADC;
-		volatile uint16_t* levelADC;
+		uint32_t levelPot;						// modulove: VoiceManager::PotVoice (tapered Level pot, drive, pan)
 	} sampler[2];
 
 	Samples();

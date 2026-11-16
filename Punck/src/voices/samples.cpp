@@ -13,8 +13,8 @@ Samples::Samples()
 	sampler[playerB].voiceADC = &ADC_array[ADC_SampleBVoice];
 	sampler[playerA].tuningADC = &ADC_array[ADC_SampleASpeed];
 	sampler[playerB].tuningADC = &ADC_array[ADC_SampleBSpeed];
-	sampler[playerA].levelADC = &ADC_array[ADC_SampleALevel];
-	sampler[playerB].levelADC = &ADC_array[ADC_SampleBLevel];
+	sampler[playerA].levelPot = VoiceManager::potSampleA;
+	sampler[playerB].levelPot = VoiceManager::potSampleB;
 }
 
 
@@ -36,7 +36,7 @@ void Samples::Play(const uint8_t sp, uint32_t noteOffset, const uint32_t noteRan
 	sampler[sp].fractionalPosition = 0.0f;
 	sampler[sp].playbackSpeed = pitch * static_cast<float>(sampler[sp].sample->sampleRate) / systemSampleRate;
 	sampler[sp].semitoneSteps = voiceManager.TuneActive(sp == playerA ? VoiceManager::samplerA : VoiceManager::samplerB);
-	sampler[sp].velocityScale = sampler[sp].sample->volume * velocity * (static_cast<float>(*sampler[sp].levelADC) / 32768.0f);
+	sampler[sp].velocityScale = sampler[sp].sample->volume * velocity * voiceManager.LevelGain(sampler[sp].levelPot);
 }
 
 
@@ -124,14 +124,17 @@ void Samples::CalcOutput()
 	}
 
 	if (playing) {
-		// Mix samples for final output to DAC
-		outputLevel[left] = intToFloatMult *
-				(sampler[playerA].velocityScale * sampler[playerA].currentSamples[left] +
-				 sampler[playerB].velocityScale * sampler[playerB].currentSamples[left]);
-
-		outputLevel[right] = intToFloatMult *
-				(sampler[playerA].velocityScale * sampler[playerA].currentSamples[right] +
-				 sampler[playerB].velocityScale * sampler[playerB].currentSamples[right]);
+		// Mix samples for final output to DAC (modulove: each player with its Level pot drive and pan)
+		float mix[2] = {0.0f, 0.0f};
+		for (uint32_t p = 0; p < 2; ++p) {
+			float l = intToFloatMult * sampler[p].velocityScale * sampler[p].currentSamples[left];
+			float r = intToFloatMult * sampler[p].velocityScale * sampler[p].currentSamples[right];
+			voiceManager.Shape(sampler[p].levelPot, p == playerA ? VoiceManager::samplerA : VoiceManager::samplerB, l, r);
+			mix[left] += l;
+			mix[right] += r;
+		}
+		outputLevel[left] = mix[left];
+		outputLevel[right] = mix[right];
 	}
 }
 

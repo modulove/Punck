@@ -17,6 +17,8 @@ static constexpr uint32_t crashMagic = 0x43524153;		// 'CRAS'
 extern volatile CrashRecord crashRecord;
 extern uint32_t resetFlags;								// RCC->RSR at boot (reset reason)
 
+// modulove: start-up / config code of the ITCM objects stays in flash (ITCM is reserved for the audio interrupt)
+#define FLASH_CODE __attribute__((section(".flash_text")))
 #define TIMINGDEBUG false					// Capture detailed timing information
 
 #define ADC1_BUFFER_LENGTH 8

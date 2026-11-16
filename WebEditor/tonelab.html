@@ -137,7 +137,7 @@ const STRUCTS = {
   Mix:    { voice: -2, fields: [["duckDrums",1],["duckSamplers",1],["duckReverb",1],["duckHoldMs",1],["duckReleaseMs",1],["kickReverbSend",1],
             ["compOn",1],["compThreshold",1],["compRatio",1],["compAttack",1],["compRelease",1],["compKnee",1],["compMakeup",1],["compMix",1],
             ["compScHpf",1],["compKick",1],["clipMode",1],["clipDrive",1],["outTrim",1],["inputTrim",1],
-            ["keyRoot",1],["keyScale",1],["tuneMode",7]] },
+            ["keyRoot",1],["keyScale",1],["tuneMode",7],["pan",7],["driveMaxDb",1]] },
 };
 
 // ---------------------------------------------------------------------------------------------
@@ -195,7 +195,7 @@ const NEWDEF = {
   Mix: { duckDrums: 0, duckSamplers: 0, duckReverb: 0, duckHoldMs: 25, duckReleaseMs: 160, kickReverbSend: 0,
          compOn: 1, compThreshold: -12, compRatio: 3, compAttack: 15, compRelease: 120, compKnee: 6, compMakeup: 3, compMix: 1,
          compScHpf: 90, compKick: 0, clipMode: 1, clipDrive: 2, outTrim: 0, inputTrim: 0,
-         keyRoot: -1, keyScale: 0, tuneMode: [2, 3, 0, 0, 0, 3, 0] },
+         keyRoot: -1, keyScale: 0, tuneMode: [2, 3, 0, 0, 0, 3, 0], pan: [0, 0, 0.2, -0.15, 0, 0, -0.15], driveMaxDb: 12 },
 };
 for (const s in NEWDEF) FACTORY[s] = { ...NEWDEF[s], ...FACTORY[s] };
 // Engine choices on top of the existing presets
@@ -463,7 +463,7 @@ const UI = {
     ["Tail decay", "reverbDecay", 0, "decay", "ms", 20, 1500, "log"],
     ["Raw noise", "unfilteredNoiseLevel", 0, "lin", "", 0, 0.3, "lin"],
   ]},
-  Mix: { title: "Master", noDice: true, hint: "Input trim → bus compressor (drums, samples, reverb; kick only with Kick→comp) → clipper on everything. Clean and loud: keep 'Into clip' peaks around 0…+3 dB; more = audible distortion → turn Input (or the Level pots) down. 'Save to Punck' keeps it.", controls: [
+  Mix: { title: "Master", noDice: true, hint: "Input trim → bus compressor (drums, samples, reverb; kick only with Kick→comp) → clipper on everything. Clean and loud: keep 'Into clip' peaks around 0…+3 dB; more = audible distortion → turn Input (or the Level pots) down. 'Save to Punck' keeps it. Level pots: full level at ~2 o'clock (75 %), above that drive (saturation, 'Pot drive' = strength at full CW). Pan: -1 left … 1 right (constant power).", controls: [
     ["Input", "inputTrim", 0, "lin", "dB", -18, 6, "lin"],
     ["Comp", "compOn", 0, "lin", "onoff", 0, 1, "lin"],
     ["Threshold", "compThreshold", 0, "lin", "dB", -40, 0, "lin"],
@@ -484,6 +484,14 @@ const UI = {
     ["Duck hold", "duckHoldMs", 0, "lin", "ms", 0, 200, "lin"],
     ["Duck rel", "duckReleaseMs", 0, "lin", "ms", 20, 1000, "log"],
     ["Kick→verb", "kickReverbSend", 0, "lin", "", 0, 1, "lin"],
+    ["Pot drive", "driveMaxDb", 0, "lin", "dB", 0, 24, "lin"],
+    ["Pan kick", "pan", 0, "lin", "", -1, 1, "lin"],
+    ["Pan snare", "pan", 1, "lin", "", -1, 1, "lin"],
+    ["Pan hats", "pan", 2, "lin", "", -1, 1, "lin"],
+    ["Pan smp A", "pan", 3, "lin", "", -1, 1, "lin"],
+    ["Pan smp B", "pan", 4, "lin", "", -1, 1, "lin"],
+    ["Pan toms", "pan", 5, "lin", "", -1, 1, "lin"],
+    ["Pan clap", "pan", 6, "lin", "", -1, 1, "lin"],
   ]},
   Key: { title: "Key & scale", struct: "Mix", noDice: true, hint: "Tonal voices snap to the key: configured pitch, MIDI notes and the snare Tuning pot (steps through the scale). Kick root+5 keeps the low end on root or fifth. Samplers: speed pot in semitone steps. Key off = free pitch as before.", controls: [
     ["Key", "keyRoot", 0, "lin", "key", -1, 11, "lin"],

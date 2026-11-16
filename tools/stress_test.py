@@ -444,7 +444,7 @@ def restore_snapshot(mod, snap, log):
             mod.write_mix_raw(bytes.fromhex(snap["mix_raw"]))     # master bus over SysEx
             time.sleep(0.3)
             try:
-                if mod.read_mix_raw().hex() == snap["mix_raw"]:
+                if mod.read_mix_raw().hex()[:len(snap["mix_raw"])] == snap["mix_raw"]:   # newer firmware appends fields
                     break
             except Exception as e:
                 log(f"mix read back failed: {e}")

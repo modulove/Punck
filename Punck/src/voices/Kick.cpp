@@ -185,7 +185,7 @@ static inline float Saturate(const float x, const float drive)
 void Kick::Play(const uint8_t voice, const uint32_t noteOffset, const uint32_t noteRange, const float velocity, const float pitch)
 {
 	playing = true;
-	velocityScale = velocity * (static_cast<float>(ADC_array[ADC_KickLevel]) / 32768.0f);
+	velocityScale = velocity * voiceManager.LevelGain(VoiceManager::potKick);
 	// Key & scale: the hit's fundamental snaps to the key (notePitch then carries the tuned ratio for every engine)
 	const float baseHz = (engine == classic) ? config.initSlowSinFreq : config.pitch;
 	notePitch = voiceManager.Tune(VoiceManager::kick, baseHz * pitch) / baseHz;
@@ -350,7 +350,7 @@ void Kick::CalcOutput()
 		return;
 	}
 
-	const float level = static_cast<float>(ADC_array[ADC_KickLevel]) / 32768.0f;
+	const float level = voiceManager.LevelGain(VoiceManager::potKick);
 	const float f0 = std::min(config.pitch * notePitch / systemSampleRate, 0.1f);
 	float out = 0.0f;
 
@@ -587,7 +587,7 @@ uint32_t Kick::SerialiseConfig(uint8_t** buff, const uint8_t voiceIndex)
 }
 
 
-void Kick::StoreConfig(uint8_t* buff, const uint32_t len)
+FLASH_CODE void Kick::StoreConfig(uint8_t* buff, const uint32_t len)
 {
 	if (buff != nullptr && len <= sizeof(config)) {
 		memcpy(&config, buff, len);

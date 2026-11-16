@@ -9,6 +9,7 @@
 #include "Toms.h"
 #include "Claps.h"
 #include "Dynamics.h"
+#include "LevelPot.h"
 #include "Harmony.h"
 #include <cstring>
 
@@ -168,6 +169,11 @@ public:
 		float keyRoot = -1.0f;				// -1 = off, 0 = C ... 11 = B
 		float keyScale = 0.0f;				// see scaleMasks: 0 minor (Aeolian), 1 Dorian, 2 Phrygian, ...
 		float tuneMode[Voice::count] = {2, 3, 0, 0, 0, 3, 0};	// per voice: 0 off, 1 root, 2 root + 5th, 3 scale, 4 pentatonic subset
+
+		// Pan per voice (-1 left .. 1 right, constant power, centre = unchanged). Subtle by default: hats a little right,
+		// claps and sampler A a little left; kick, snare and the toms / bass voice stay centred (punch, mono PAs)
+		float pan[Voice::count] = {0.0f, 0.0f, 0.2f, -0.15f, 0.0f, 0.0f, -0.15f};
+		float driveMaxDb = 12.0f;			// Level pot drive zone (77 - 100 % of the travel): saturation gain at full CW
 	} mixConfig;
 
 	struct Meter {
@@ -190,6 +196,23 @@ public:
 		if (cycles > profMax[block]) {
 			profMax[block] = cycles;
 		}
+	}
+
+	// modulove: Level pots (dsp/LevelPot.h): audio taper to unity at 75 %, drive in the last part of the travel.
+	// Gains are computed in the main loop (UpdateLevelPots), the voices read LevelGain() when they play.
+	enum PotVoice : uint32_t {potKick, potSnare, potHats, potSampleA, potSampleB, potCount, potNone = potCount};
+	float LevelGain(const uint32_t p) const { return levelGain[p]; }
+	void UpdateLevelPots();
+
+	// Drive (Level pot top) and pan for one voice's output; l / r in and out (audio interrupt)
+	void Shape(const uint32_t pot, const uint32_t v, float& l, float& r) {
+		if (pot < potCount && driveAmount[pot] > 0.0f) {
+			drive[pot].Process(l, r, driveGain[pot], driveNorm[pot], driveFade[pot]);
+		} else if (pot < potCount) {
+			drive[pot].active = false;
+		}
+		l *= panGain[v][0];
+		r *= panGain[v][1];
 	}
 
 	// Key & scale: returns hz snapped to the voice's allowed notes (unchanged when the key is off or the voice mode is 0)
@@ -233,6 +256,15 @@ private:
 	static constexpr uint32_t longPressMs = 700;
 	static constexpr uint32_t blinkOnMs = 150, blinkPeriodMs = 350;
 	uint32_t gpioIdr[11] = {};									// per-sample snapshot of the GPIO input registers (port A = 0 .. K = 10)
+
+	// Level pots / drive / pan (see Shape)
+	levelpot::DriveStage drive[potCount];
+	volatile float levelGain[potCount] = {1.0f, 1.0f, 1.0f, 1.0f, 1.0f};
+	volatile float driveAmount[potCount] = {};
+	volatile float driveGain[potCount] = {1.0f, 1.0f, 1.0f, 1.0f, 1.0f};
+	volatile float driveNorm[potCount] = {1.0f, 1.0f, 1.0f, 1.0f, 1.0f};
+	volatile float driveFade[potCount] = {};
+	float panGain[Voice::count][2] = {{1.0f, 1.0f}, {1.0f, 1.0f}, {1.0f, 1.0f}, {1.0f, 1.0f}, {1.0f, 1.0f}, {1.0f, 1.0f}, {1.0f, 1.0f}};
 	uint8_t playTurn = 0;										// round robin start for pending hits (one hit set up per sample)
 	bool holding[Voice::count] = {};
 	bool holdFired[Voice::count] = {};

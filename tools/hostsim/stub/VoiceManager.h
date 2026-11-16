@@ -7,6 +7,7 @@
 #include "Toms.h"
 #include "Dynamics.h"
 #include "Harmony.h"
+#include "LevelPot.h"
 
 struct NoteMapper {
 	struct PWMLED { void Level(float) {} } pwmLed;
@@ -15,6 +16,11 @@ struct NoteMapper {
 class VoiceManager {
 public:
 	enum Voice {kick, snare, hihat, samplerA, samplerB, toms, claps, count};
+	enum PotVoice : uint32_t {potKick, potSnare, potHats, potSampleA, potSampleB, potCount, potNone = potCount};
+	float LevelGain(const uint32_t p) const {			// same taper as the firmware, straight from the pot
+		static constexpr uint32_t adc[potCount] = {ADC_KickLevel, ADC_SnareLevel, ADC_HiHatLevel, ADC_SampleALevel, ADC_SampleBLevel};
+		return levelpot::Gain(ADC_array[adc[p]]);
+	}
 	int32_t keyRoot = -1;									// same Key & scale logic as the firmware
 	uint16_t tuneMask[count] = {};
 	void SetKey(int32_t root, uint32_t scale, const uint32_t modes[count]) {

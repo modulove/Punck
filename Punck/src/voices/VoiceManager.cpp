@@ -1,5 +1,6 @@
 #include <configManager.h>
 #include "VoiceManager.h"
+#include "LevelPot.h"
 #include "Sequencer.h"
 #include "reverb.h"
 
@@ -124,6 +125,7 @@ void VoiceManager::Output()
 		kickOut[left] = kickOut[right] = 0.0f;
 		RecoverVoice(Voice::kick);
 	}
+	Shape(potKick, Voice::kick, kickOut[left], kickOut[right]);
 	float drumsOut[2] = {0.0f, 0.0f};
 	float samplesOut[2] = {samples.outputLevel[left], samples.outputLevel[right]};
 	if (!Finite(samplesOut[left]) || !Finite(samplesOut[right])) {
@@ -132,8 +134,9 @@ void VoiceManager::Output()
 	}
 	for (auto& nm : noteMapper) {
 		if (nm.drumVoice != nullptr && nm.voiceIndex == 0 && nm.voice != Voice::kick && nm.voice != Voice::samplerA) {
-			const float l = nm.drumVoice->outputLevel[left], r = nm.drumVoice->outputLevel[right];
+			float l = nm.drumVoice->outputLevel[left], r = nm.drumVoice->outputLevel[right];
 			if (Finite(l) && Finite(r)) {
+				Shape(nm.voice == Voice::snare ? potSnare : nm.voice == Voice::hihat ? potHats : potNone, nm.voice, l, r);
 				drumsOut[left]  += l;
 				drumsOut[right] += r;
 			} else {
@@ -620,8 +623,26 @@ void VoiceManager::RecoverVoice(const uint32_t v)
 }
 
 
-void VoiceManager::IdleTasks()
+FLASH_CODE void VoiceManager::UpdateLevelPots()
 {
+	// Main loop: Level pot taper and drive zone (dsp/LevelPot.h) -> gains read by the voices and Shape()
+	static constexpr uint32_t adc[potCount] = {ADC_KickLevel, ADC_SnareLevel, ADC_HiHatLevel, ADC_SampleALevel, ADC_SampleBLevel};
+	const float maxDb = mixConfig.driveMaxDb;
+	for (uint32_t p = 0; p < potCount; ++p) {
+		const uint16_t v = ADC_array[adc[p]];
+		const levelpot::DriveParams d = levelpot::Params(v, maxDb);
+		levelGain[p] = levelpot::Gain(v);
+		driveGain[p] = d.gain;
+		driveNorm[p] = d.norm;
+		driveFade[p] = d.fade;
+		driveAmount[p] = d.amount;
+	}
+}
+
+
+FLASH_CODE void VoiceManager::IdleTasks()
+{
+	UpdateLevelPots();
 	if (reverbClearPending) {								// nan / inf reached the reverb: empty it (the interrupt bypasses it)
 		reverb.Clear();
 		reverbClearPending = false;
@@ -636,7 +657,7 @@ void VoiceManager::IdleTasks()
 }
 
 
-uint32_t VoiceManager::GetConfig(uint8_t** buff)
+FLASH_CODE uint32_t VoiceManager::GetConfig(uint8_t** buff)
 {
 	// Return a pointer to MIDI map config data for saving (upstream's buffer was one byte short so the channel was never saved)
 	uint8_t i = 0;
@@ -653,7 +674,7 @@ uint32_t VoiceManager::GetConfig(uint8_t** buff)
 }
 
 
-void VoiceManager::StoreConfig(const uint8_t* buff, const uint32_t len)
+FLASH_CODE void VoiceManager::StoreConfig(const uint8_t* buff, const uint32_t len)
 {
 	// Reads MIDI map config data back into member values (tolerates shorter, older blocks)
 	if (len < Voice::count * 2) {
@@ -698,6 +719,15 @@ void VoiceManager::StoreMixConfig(const uint8_t* buff, const uint32_t len)
 	clipGain = std::pow(10.0f, std::clamp(m.clipDrive, -12.0f, 24.0f) / 20.0f);
 	outGain = std::pow(10.0f, std::clamp(m.outTrim, -24.0f, maxOutTrimDb) / 20.0f);	// > 0 dB only up to DAC full scale
 	inGain = std::pow(10.0f, std::clamp(m.inputTrim, -24.0f, 12.0f) / 20.0f);
+	for (uint32_t v = 0; v < Voice::count; ++v) {						// constant power, centre = 1 / 1 (unchanged)
+		m.pan[v] = std::clamp(m.pan[v], -1.0f, 1.0f);
+		const float theta = (m.pan[v] + 1.0f) * 0.7853982f;
+		panGain[v][0] = 1.4142136f * std::cos(theta);
+		panGain[v][1] = 1.4142136f * std::sin(theta);
+		if (m.pan[v] == 0.0f) {
+			panGain[v][0] = panGain[v][1] = 1.0f;						// exactly unchanged in the centre
+		}
+	}
 
 	// Key & scale: allowed pitch classes per voice
 	tuneRoot = (m.keyRoot < -0.5f) ? -1 : static_cast<int32_t>(m.keyRoot + 0.5f) % 12;
@@ -721,7 +751,7 @@ float VoiceManager::Tune(const Voice v, const float hz) const
 }
 
 
-void VoiceManager::GetMeter(Meter& m)
+FLASH_CODE void VoiceManager::GetMeter(Meter& m)
 {
 	auto toDb = [](const float x) { return 20.0f * std::log10(std::max(x, 1e-5f)); };
 	m.reductionDb = meterReduction;

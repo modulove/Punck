@@ -1,10 +1,11 @@
 #include "KarplusString.h"
+#include "initialisation.h"
 #include <algorithm>
 #include <cmath>
 #include "stmlib/dsp/units.h"
 #include "stmlib/utils/random.h"
 
-void KarplusString::Init(float* buffer)
+FLASH_CODE void KarplusString::Init(float* buffer)
 {
 	for (uint32_t i = 0; i < maxStrings; ++i) {
 		float* b = buffer + i * floatsPerString;

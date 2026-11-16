@@ -12,6 +12,7 @@ static constexpr uint32_t systemSampleRate = 48000;
 static constexpr float systemMaxFreq = 22000.0f;
 extern volatile uint32_t SysTickVal;
 
+#define FLASH_CODE
 #define ADC1_BUFFER_LENGTH 8
 #define ADC2_BUFFER_LENGTH 7
 extern volatile uint16_t ADC_array[ADC1_BUFFER_LENGTH + ADC2_BUFFER_LENGTH];

@@ -10,7 +10,7 @@ void HiHat::Play(const uint8_t voice, const uint32_t noteOffset, uint32_t noteRa
 {
 	playing = true;
 
-	velocityScale = velocity * (static_cast<float>(ADC_array[ADC_HiHatLevel]) / 32768.0f);
+	velocityScale = velocity * voiceManager.LevelGain(VoiceManager::potHats);
 	attack = true;
 	attackLevel = 0.0f;
 	noiseScale = intToFloatMult * config.noiseInitLevel;		// noise uses RND peripheral: scale 32 bit value to -1.0 to +1.0
@@ -86,7 +86,7 @@ void HiHat::CalcOutput()
 	}
 	trigger = false;
 
-	const float level = static_cast<float>(ADC_array[ADC_HiHatLevel]) / 32768.0f;
+	const float level = voiceManager.LevelGain(VoiceManager::potHats);
 	outputLevel[0] = outputLevel[1] = level * out;
 	ledEnv = std::max(std::abs(out) * 2.0f, ledEnv * 0.9995f);
 	noteMapper->pwmLed.Level(std::min(ledEnv, 1.0f));
@@ -218,7 +218,7 @@ uint32_t HiHat::SerialiseConfig(uint8_t** buff, const uint8_t voiceIndex)
 }
 
 
-void HiHat::StoreConfig(uint8_t* buff, const uint32_t len)
+FLASH_CODE void HiHat::StoreConfig(uint8_t* buff, const uint32_t len)
 {
 	if (buff != nullptr && len <= sizeof(config)) {
 		memcpy(&config, buff, len);

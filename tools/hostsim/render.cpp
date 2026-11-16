@@ -58,7 +58,9 @@ struct Stats {
 
 static void Pots(const float kickAttack, const float kickDecay, const float hatDecay)
 {
-	for (auto& a : ADC_array) a = 32768;			// all levels at noon (gain 1.0), other pots centred
+	for (auto& a : ADC_array) a = 32768;			// other pots centred
+	// Level pots on the unity plateau (76 % since the r28 taper; was noon = gain 1.0): same levels as before
+	for (const auto p : {ADC_KickLevel, ADC_SnareLevel, ADC_HiHatLevel, ADC_SampleALevel, ADC_SampleBLevel}) ADC_array[p] = 49807;
 	ADC_array[ADC_KickAttack] = static_cast<uint16_t>(kickAttack * 65535.0f);
 	ADC_array[ADC_KickDecay] = static_cast<uint16_t>(kickDecay * 65535.0f);
 	ADC_array[ADC_HiHatDecay] = static_cast<uint16_t>(hatDecay * 65535.0f);
@@ -291,7 +293,8 @@ static void RenderGroove(const std::string& dir, const std::string& name, MixCon
 	r.hat.SetEngine(1);												// 808 hats
 	Pots(0.6f, 0.45f, 0.3f);
 	for (auto pot : {ADC_KickLevel, ADC_SnareLevel, ADC_HiHatLevel}) {		// level pots: 1.0 = noon, 2.0 = full
-		ADC_array[pot] = static_cast<uint16_t>(std::min(kickLevel * 32768.0f, 65535.0f));
+		// r28 taper: 1.0 = unity plateau (old noon); above unity the pots now drive instead of adding gain (not in hostsim)
+		ADC_array[pot] = kickLevel == 1.0f ? 49807 : static_cast<uint16_t>(std::min(kickLevel * 32768.0f, 65535.0f));
 	}
 	MasterBus bus; bus.m = cfg; bus.Configure();
 	const float bpm = 124.0f, sixteenth = 60.0f / bpm * systemSampleRate / 4.0f;
@@ -461,7 +464,7 @@ static void SnareSustainTest()
 	alignas(Rig) static unsigned char mem[sizeof(Rig)];
 	Rig& r = *new (mem) Rig;
 	r.snare.SetEngine(0);
-	ADC_array[ADC_SnareLevel] = 32768;									// Level pot at noon
+	ADC_array[ADC_SnareLevel] = 49807;									// Level pot at unity (r28 taper)
 	ADC_array[ADC_SnareTuning] = 32768;
 	ADC_array[ADC_SnareFilter] = 49000;
 	uint8_t* buff = nullptr;
@@ -865,11 +868,88 @@ static void SynthTests(const std::string& dir)
 	}
 }
 
+// Level pot drive zone + pan (r28): the firmware's levelpot::Params / DriveStage on the voice outputs ('drive')
+static void DriveTests(const std::string& dir)
+{
+	const float beat = 60.0f / 124.0f * systemSampleRate;
+	alignas(Rig) static unsigned char mem[sizeof(Rig)];
+	printf("\nLevel pot travel (taper): ");
+	for (const float x : {0.1f, 0.2f, 0.3f, 0.4f, 0.5f, 0.6f, 0.7f, 0.75f}) {
+		printf("%.0f%% %+.1f dB  ", 100 * x, 20.0f * std::log10(std::max(levelpot::Gain(static_cast<uint16_t>(x * 65535.0f)), 1e-6f)));
+	}
+	printf("\n\nDrive zone (max 12 dB), 4 hits per position, voice output after the drive stage:\n");
+	Wav wav;
+	for (uint32_t v = 0; v < 3; ++v) {
+		const char* names[] = {"kick deep", "snare 808", "hats 808 open"};
+		for (const float x : {0.76f, 0.80f, 0.85f, 0.90f, 0.95f, 1.0f}) {
+			Rig& r = *new (mem) Rig;
+			r.kick.SetEngine(1); r.snare.SetEngine(1); r.hat.SetEngine(1);
+			Pots(0.5f, 0.5f, 0.6f);
+			const levelpot::DriveParams d = levelpot::Params(static_cast<uint16_t>(x * 65535.0f), 12.0f);
+			levelpot::DriveStage stage;
+			Stats st;
+			for (uint32_t s = 0; s < 4 * static_cast<uint32_t>(beat); ++s) {
+				if (s % static_cast<uint32_t>(beat) == 0) {
+					if (v == 0) r.kick.Play(0, 0, 0, 1.0f, 1.0f); else if (v == 1) r.snare.Play(0, 0, 2, 1.0f, 1.0f); else r.hat.Play(0, 2, 3, 0.9f, 1.0f);
+				}
+				DrumVoice& dv = v == 0 ? static_cast<DrumVoice&>(r.kick) : v == 1 ? static_cast<DrumVoice&>(r.snare) : static_cast<DrumVoice&>(r.hat);
+				dv.CalcOutput();
+				float L = dv.outputLevel[0], R = dv.outputLevel[1];
+				if (d.amount > 0.0f) stage.Process(L, R, d.gain, d.norm, d.fade);
+				st.Add(L);
+				if (x == 0.76f || x == 0.90f || x == 1.0f) wav.Add(L, R);
+			}
+			printf("  %-14s pot %3.0f%%: drive %.2f gain %+5.1f dB  peak %+5.1f dBFS  rms %+5.1f dBFS  crest %4.1f dB  nan %llu\n", names[v], 100 * x,
+					d.amount, 20.0f * std::log10(d.gain), st.PeakDb(), st.RmsDb(), st.PeakDb() - st.RmsDb(), (unsigned long long)st.nan);
+		}
+	}
+	wav.Write(dir + "/drive_unity_90_100.wav");
+
+	// Sweep: pot 70 % -> 100 % over 8 s with a kick on every beat; the largest sample step must stay that of the dry kick
+	{
+		Rig& r = *new (mem) Rig;
+		r.kick.SetEngine(1);
+		Pots(0.5f, 0.5f, 0.6f);
+		levelpot::DriveStage stage;
+		Wav sw; Stats st;
+		float prev = 0.0f, maxStep = 0.0f, maxStepDry = 0.0f, prevDry = 0.0f;
+		const uint32_t n = 8 * systemSampleRate;
+		for (uint32_t s = 0; s < n; ++s) {
+			if (s % static_cast<uint32_t>(beat) == 0) r.kick.Play(0, 0, 0, 1.0f, 1.0f);
+			const float x = 0.70f + 0.30f * s / n;
+			const levelpot::DriveParams d = levelpot::Params(static_cast<uint16_t>(x * 65535.0f), 12.0f);
+			r.kick.CalcOutput();
+			float L = r.kick.outputLevel[0], R = r.kick.outputLevel[1];
+			const float dry = L * levelpot::Gain(static_cast<uint16_t>(x * 65535.0f));
+			L *= levelpot::Gain(static_cast<uint16_t>(x * 65535.0f)); R = L;
+			if (d.amount > 0.0f) stage.Process(L, R, d.gain, d.norm, d.fade); else stage.active = false;
+			maxStep = std::max(maxStep, std::fabs(L - prev)); prev = L;
+			maxStepDry = std::max(maxStepDry, std::fabs(dry - prevDry)); prevDry = dry;
+			sw.Add(L, R); st.Add(L);
+		}
+		sw.Write(dir + "/drive_sweep_70_100.wav");
+		printf("\n  sweep 70 -> 100 %%: largest sample step %.3f (dry kick %.3f), peak %+5.1f dBFS, nan %llu\n", maxStep, maxStepDry, st.PeakDb(),
+				(unsigned long long)st.nan);
+	}
+
+	// Pan (constant power, same formula as StoreMixConfig)
+	printf("\nPan: ");
+	for (const float p : {0.0f, 0.15f, 0.2f, 0.5f, 1.0f}) {
+		const float th = (p + 1.0f) * 0.7853982f, l = p == 0.0f ? 1.0f : 1.4142136f * std::cos(th), rr = p == 0.0f ? 1.0f : 1.4142136f * std::sin(th);
+		printf("%.2f: L %+.1f R %+.1f dB, mono sum %+.2f dB | ", p, 20 * std::log10(std::max(l, 1e-6f)), 20 * std::log10(rr), 20 * std::log10((l + rr) / 2));
+	}
+	printf("\n");
+}
+
 int main(int argc, char** argv)
 {
 	const std::string dir = argc > 1 ? argv[1] : ".";
 	if (argc > 2 && std::string(argv[2]) == "snaresustain") {
 		SnareSustainTest();
+		return 0;
+	}
+	if (argc > 2 && std::string(argv[2]) == "drive") {
+		DriveTests(dir);
 		return 0;
 	}
 	if (argc > 2 && std::string(argv[2]) == "synths") {

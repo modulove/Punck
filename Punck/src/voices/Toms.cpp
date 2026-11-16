@@ -285,7 +285,7 @@ uint32_t Toms::SerialiseConfig(uint8_t** buff, const uint8_t voiceIndex)
 }
 
 
-void Toms::StoreConfig(uint8_t* buff, const uint32_t len)
+FLASH_CODE void Toms::StoreConfig(uint8_t* buff, const uint32_t len)
 {
 	if (buff == nullptr && !stringReady) {
 		kString.Init(stringBuffer);				// start-up only: clears the delay lines

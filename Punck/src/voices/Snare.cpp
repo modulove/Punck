@@ -23,7 +23,12 @@ void Snare::Play(const uint8_t voice, const uint32_t noteOffset, uint32_t noteRa
 		}
 		noiseLevel = config.noiseInitLevel;
 		velocityScale = velocity * (static_cast<float>(ADC_array[ADC_SnareLevel]) / 32768.0f);
-		sustainRate = 0.0012f * sqrt((static_cast<float>(noteOffset) + 1.0f) / noteRange);		// note offset allows for longer sustained hits
+		// Note offset allows for longer sustained hits. modulove: the per-sample factor stays below 1 - decay +
+		// sustainRate went above 1 with long Tone Lab decays (> ~120 ms with MIDI note 38) and the level grew every
+		// sample until inf / nan (stress test 2026-11-16: +107 dB, then a silent module with DC on the output)
+		const float sustainRate = 0.0012f * sqrt((static_cast<float>(noteOffset) + 1.0f) / noteRange);
+		noiseFactor = std::min(config.noiseDecay + sustainRate, maxDecayFactor);
+		partialFactor = std::min(config.partialDecay + sustainRate, maxDecayFactor);
 		return;
 	}
 
@@ -75,13 +80,13 @@ void Snare::CalcClassic()
 	}
 	const float rand1 = intToFloatMult * static_cast<int32_t>(RNG->DR);		// Left channel random number used for noise
 
-	noiseLevel *= config.noiseDecay + sustainRate;
+	noiseLevel *= noiseFactor;
 	float maxLevel = noiseLevel;
 
 	float partialOutput = 0.0f;
 	for (uint8_t i = 0; i < partialCount; ++i) {
 		partialpos[i] += partialInc[i];							// Set current poition in sine wave
-		partialLevel[i] *= config.partialDecay + sustainRate;
+		partialLevel[i] *= partialFactor;
 		partialOutput += std::sin(partialpos[i]) * partialLevel[i];
 		if (partialLevel[i] > maxLevel) {
 			maxLevel = partialLevel[i];

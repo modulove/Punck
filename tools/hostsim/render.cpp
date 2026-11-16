@@ -454,9 +454,47 @@ static void LongRun(const std::string& dir, const double hours)
 }
 
 
+// Classic snare with a long noise decay hit on the top of its MIDI range (note offset 1 of 2): the per-sample decay
+// factor must stay below 1 (stress test 2026-11-16: decay + sustainRate went above 1 and the level grew to inf)
+static void SnareSustainTest()
+{
+	alignas(Rig) static unsigned char mem[sizeof(Rig)];
+	Rig& r = *new (mem) Rig;
+	r.snare.SetEngine(0);
+	ADC_array[ADC_SnareLevel] = 32768;									// Level pot at noon
+	ADC_array[ADC_SnareTuning] = 32768;
+	ADC_array[ADC_SnareFilter] = 49000;
+	uint8_t* buff = nullptr;
+	const uint32_t size = r.snare.SerialiseConfig(&buff, 0);
+	float* cfg = reinterpret_cast<float*>(buff);
+	cfg[1] = std::exp(std::log(0.001f) / (48000.0f * 0.412f));		// noiseDecay 412 ms (parameter set 13)
+	cfg[4] = std::exp(std::log(0.001f) / (48000.0f * 0.054f));		// partialDecay 54 ms
+	cfg[0] = 1.69f;													// noiseInitLevel
+	r.snare.StoreConfig(buff, size);
+	float peak = 0.0f, tailPeak = 0.0f;
+	for (uint32_t s = 0; s < 48000 * 6; ++s) {
+		if (s < 48000 * 2 && s % 4800 == 0) {
+			r.snare.Play(0, 1, 2, 1.0f, 1.0f);						// MIDI note 38: offset 1 of the snare's 2 notes
+		}
+		r.snare.CalcOutput();
+		const float a = std::fabs(r.snare.outputLevel[0]);
+		peak = std::isfinite(a) ? std::max(peak, a) : INFINITY;
+		if (s > 48000 * 5) {
+			tailPeak = std::isfinite(a) ? std::max(tailPeak, a) : INFINITY;
+		}
+	}
+	printf("Classic snare, noise decay 412 ms, note 38 hits for 2 s: peak %.2f (%+.1f dB), level 3 s after the last hit %+.1f dB\n",
+			peak, 20.0f * std::log10(std::max(peak, 1e-9f)), 20.0f * std::log10(std::max(tailPeak, 1e-9f)));
+}
+
+
 int main(int argc, char** argv)
 {
 	const std::string dir = argc > 1 ? argv[1] : ".";
+	if (argc > 2 && std::string(argv[2]) == "snaresustain") {
+		SnareSustainTest();
+		return 0;
+	}
 	if (argc > 3 && std::string(argv[2]) == "longrun") {
 		LongRun(dir, atof(argv[3]));
 		return 0;

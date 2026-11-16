@@ -35,7 +35,8 @@ private:
 	float partialInc[partialCount];
 	float noiseLevel;
 	float velocityScale;
-	float sustainRate;
+	float noiseFactor = 0.99f, partialFactor = 0.99f;			// per-sample decay incl. note sustain, set per hit (< 1)
+	static constexpr float maxDecayFactor = 0.99995f;			// longest decay: -60 dB after ~2.9 s
 
 	// Engine state
 	Engine engine = analog;

@@ -243,6 +243,8 @@ def parse_cpu(text):
     r["nan"] = bool(re.search(r"\bnan\b|\binf\b", text, re.I))
     m4 = re.search(r"Audio rate: (\d+)/s \(48000\)\s+I2S restarts: (\d+)", text)            # firmware r13+
     r["rate"], r["restarts"] = (int(m4.group(1)), int(m4.group(2))) if m4 else (None, None)
+    m5 = re.search(r"USB EP0 aborts: (\d+)", text)                                             # firmware r15+
+    r["ep0"] = int(m5.group(1)) if m5 else None
     return r
 
 
@@ -607,6 +609,8 @@ def main():
                             flags.append(f"RATE{r['rate']}")
                         if last and r["restarts"] is not None and last.get("restarts") is not None and r["restarts"] > last["restarts"]:
                             flags.append(f"I2SRESTART+{r['restarts'] - last['restarts']}")
+                        if last and r.get("ep0") is not None and last.get("ep0") is not None and r["ep0"] > last["ep0"]:
+                            flags.append(f"EP0ABORT+{r['ep0'] - last['ep0']}")     # info: USB control transfer recovered
                         clip = to_float(r["clip_db"])
                         if r["nan"]:
                             flags.append("NAN")

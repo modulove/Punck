@@ -10,27 +10,31 @@
 // I2S: Peripheral Clock (AKA per_ck) set to HSI = 64MHz
 // ADC: Peripheral Clock (AKA per_ck) set to HSI = 64MHz
 
-#if CPUCLOCK == 400
-// 8MHz (HSE) / 2 (M) * 200 (N) / 2 (P) = 400MHz
 // 12MHz (HSE) / 3 (M) * 200 (N) / 2 (P) = 400MHz
+// modulove: 480 MHz on revision V devices (12MHz / 3 * 240 = 960 MHz VCO / 2), chosen at run time from DBGMCU REV_ID:
+// earlier revisions (Y) are limited to 400 MHz. The upstream 480 MHz settings assumed an 8 MHz crystal (M = 2), which
+// with the Punck's 12 MHz crystal would put the VCO at 1440 MHz.
 #define PLL_M1 3
 #define PLL_N1 200
+#define PLL_N1_480 240
 #define PLL_P1 1			// 0000001: pll1_p_ck = vco1_ck / 2
-#define PLL_Q1 4			// This is used for I2S clock: 8MHz (HSE) / 2 (M) * 200 (N) / 4 (Q) = 200MHz
+#define PLL_Q1 4			// pll1_q_ck (unused: I2S runs from PLL3)
 #define PLL_R1 2
 
-#else
-// 8MHz (HSE) / 2 (M) * 240 (N) / 2 (P) = 480MHz
-#define PLL_M1 2
-#define PLL_N1 240
-#define PLL_P1 1			// 0000001: pll1_p_ck = vco1_ck / 2
-#define PLL_Q1 4			// This is used for I2S clock: 8MHz (HSE) / 2 (M) * 240 (N) / 4 (Q) = 240MHz
-#define PLL_R1 2
+uint32_t cpuClockMHz = 400;
+
+// modulove: 480 MHz is opt-in. r21 (480 MHz chosen from DBGMCU REV_ID at boot) did not start standalone in the case
+// (no USB, no debugger attached) - until that is understood the default is 400 MHz and DBGMCU is not read at all.
+#ifndef CPU_480MHZ
+#define CPU_480MHZ 0
 #endif
 
 
 void InitClocks()
 {
+	const bool revV = CPU_480MHZ && (DBGMCU->IDCODE >> 16) == 0x2003;	// revision V: VOS0 and 480 MHz allowed
+	cpuClockMHz = revV ? 480 : 400;
+
 	RCC->APB4ENR |= RCC_APB4ENR_SYSCFGEN;			// Enable System configuration controller clock
 
 	// Voltage scaling - see Datasheet page 113. VOS1 > 300MHz; VOS2 > 200MHz; VOS3 < 200MHz
@@ -38,12 +42,13 @@ void InitClocks()
 	PWR->D3CR |= PWR_D3CR_VOS;						// Configure voltage scaling level 1 before engaging overdrive (0b11 = VOS1)
 	while ((PWR->CSR1 & PWR_CSR1_ACTVOSRDY) == 0);	// Check Voltage ready 1= Ready, voltage level at or above VOS selected level
 
-#if CPUCLOCK > 400
-	// Activate the LDO regulator overdrive mode. Must be written only in VOS1 voltage scaling mode.
-	// This activates VSO0 mode for use in clock speeds from 400MHz to 480MHz
-	SYSCFG->PWRCR |= SYSCFG_PWRCR_ODEN;
-	while ((SYSCFG->PWRCR & SYSCFG_PWRCR_ODEN) == 0);
-#endif
+	if (revV) {
+		// Activate the LDO regulator overdrive mode. Must be written only in VOS1 voltage scaling mode.
+		// This activates VSO0 mode for use in clock speeds from 400MHz to 480MHz
+		SYSCFG->PWRCR |= SYSCFG_PWRCR_ODEN;
+		while ((SYSCFG->PWRCR & SYSCFG_PWRCR_ODEN) == 0);
+		while ((PWR->D3CR & PWR_D3CR_VOSRDY) == 0);			// modulove: wait until VOS0 is reached (RM0433)
+	}
 
 	RCC->CR |= RCC_CR_HSEON;						// Turn on external oscillator
 	while ((RCC->CR & RCC_CR_HSERDY) == 0);			// Wait till HSE is ready
@@ -53,7 +58,7 @@ void InitClocks()
 	                 PLL_M1 << RCC_PLLCKSELR_DIVM1_Pos;
 
 	// PLL 1 dividers
-	RCC->PLL1DIVR = (PLL_N1 - 1) << RCC_PLL1DIVR_N1_Pos |
+	RCC->PLL1DIVR = ((revV ? PLL_N1_480 : PLL_N1) - 1) << RCC_PLL1DIVR_N1_Pos |
 			        PLL_P1 << RCC_PLL1DIVR_P1_Pos |
 			        (PLL_Q1 - 1) << RCC_PLL1DIVR_Q1_Pos |
 			        (PLL_R1 - 1) << RCC_PLL1DIVR_R1_Pos;
@@ -79,6 +84,10 @@ void InitClocks()
 	// By default Flash latency is set to 7 wait states - set to 4 for now but may need to increase
 	FLASH->ACR = (FLASH->ACR & ~FLASH_ACR_LATENCY) | FLASH_ACR_LATENCY_4WS;
 	while ((FLASH->ACR & FLASH_ACR_LATENCY_Msk) != FLASH_ACR_LATENCY_4WS);
+	if (revV) {
+		// modulove: 240 MHz AXI at VOS0: 4 wait states and programming delay 2 (as ST's CubeMX sets for 480 MHz)
+		FLASH->ACR = (FLASH->ACR & ~FLASH_ACR_WRHIGHFREQ) | (2 << FLASH_ACR_WRHIGHFREQ_Pos);
+	}
 
 	SystemCoreClockUpdate();						// Update SystemCoreClock (system clock frequency)
 }
@@ -416,7 +425,12 @@ void InitI2S()
 	SPI2->I2SCFGR |= SPI_I2SCFGR_CHLEN;				// Channel Length = 32 bits
 
 	SPI2->CFG1 |= SPI_CFG1_UDRCFG_1;				// In the event of underrun resend last transmitted data frame
-	SPI2->CFG1 |= SPI_CFG1_FTHLV_1;					// FIFO threshold level. 0001: 2-data
+	// modulove: FIFO threshold 0001 = 2-data packet = one stereo frame, matching the two TXDR writes per interrupt.
+	// Upstream set FTHLV_1 (0010 = 3-data packet, the comment said 2-data): the interrupt then came with only one word
+	// left in the FIFO (10 us before an underrun), and after overloads it could settle into a rhythm with extra
+	// interrupts and words written into a full FIFO - measured 68,000 interrupts/s instead of 48,000: all voices
+	// played ~6 semitones high and drifted with the load (the 'wobbly pitch').
+	SPI2->CFG1 |= SPI_CFG1_FTHLV_0;
 
 	/* I2S Clock
 	000: pll1_q_ck clock selected as SPI/I2S1,2 and 3 kernel clock (default after reset)
@@ -436,8 +450,27 @@ void InitI2S()
 	PER_CLK = 64MHz				64000000  / (32*2  * ((2 * 10) + 1)) = 47619.05
 
 	Note timing problems experienced using both pll1_q_ck and pll2_p_ck when FMC controller is using PLL2
+
+	modulove: PLL3 from the 12 MHz crystal gives exactly 48 kHz (upstream per_ck = HSI RC oscillator: nominal 47619 Hz,
+	measured ~47810 Hz on the module, temperature dependent - all pitches ~7 cents flat). PLL3 is otherwise unused.
+	PLL3 = 12MHz / 5 (M) = 2.4MHz * 128 (N) = 307.2MHz / 4 (P) = 76.8MHz:	76800000 / (32*2 * ((2 * 12) + 1)) = 48000.00
+	Define I2S_PER_CLK instead of I2S_PLL3_CLK to go back to the upstream clock.
 	*/
-#define I2S_PER_CLK
+#define I2S_PLL3_CLK
+#ifdef I2S_PLL3_CLK
+	RCC->PLLCKSELR = (RCC->PLLCKSELR & ~RCC_PLLCKSELR_DIVM3) | (5 << RCC_PLLCKSELR_DIVM3_Pos);
+	RCC->PLL3DIVR = (128 - 1) << RCC_PLL3DIVR_N3_Pos | (4 - 1) << RCC_PLL3DIVR_P3_Pos |
+					(2 - 1) << RCC_PLL3DIVR_Q3_Pos | (2 - 1) << RCC_PLL3DIVR_R3_Pos;
+	RCC->PLLCFGR = (RCC->PLLCFGR & ~(RCC_PLLCFGR_PLL3RGE | RCC_PLLCFGR_PLL3VCOSEL | RCC_PLLCFGR_PLL3FRACEN)) |
+					RCC_PLLCFGR_PLL3RGE_1 |			// 01: reference 2 - 4 MHz; VCOSEL 0: wide VCO range 192 - 836 MHz
+					RCC_PLLCFGR_DIVP3EN;
+	RCC->CR |= RCC_CR_PLL3ON;
+	while ((RCC->CR & RCC_CR_PLL3RDY) == 0);
+	RCC->D2CCIP1R = (RCC->D2CCIP1R & ~RCC_D2CCIP1R_SPI123SEL) | RCC_D2CCIP1R_SPI123SEL_1;	// 010: pll3_p_ck
+	SPI2->I2SCFGR |= (12 << SPI_I2SCFGR_I2SDIV_Pos);// Set I2SDIV to 12 with Odd factor prescaler
+	SPI2->I2SCFGR |= SPI_I2SCFGR_ODD;
+#endif
+
 #ifdef I2S_PLL2P_CLK
 	// Use PLL2 clock - configured to 200MHz
 	RCC->D2CCIP1R |= RCC_D2CCIP1R_SPI123SEL_0;
@@ -474,6 +507,23 @@ void InitI2S()
 
 	SPI2->CR1 |= SPI_CR1_SPE;						// Enable I2S
 	SPI2->CR1 |= SPI_CR1_CSTART;					// Start I2S
+}
+
+
+// modulove: stop the I2S, empty its FIFO and start it again (rate watchdog in main: the audio interrupt was called at
+// a different rate than the I2S consumes frames). Clearing SPE flushes the FIFO; the codec sees a gap of a few frames.
+void RestartI2S()
+{
+	NVIC_DisableIRQ(SPI2_IRQn);
+	SPI2->CR1 |= SPI_CR1_CSUSP;
+	for (uint32_t i = 0; i < 200000 && (SPI2->SR & SPI_SR_SUSP) == 0; ++i) {}
+	SPI2->CR1 &= ~SPI_CR1_SPE;
+	SPI2->IFCR = SPI_IFCR_EOTC | SPI_IFCR_TXTFC | SPI_IFCR_UDRC | SPI_IFCR_OVRC | SPI_IFCR_CRCEC | SPI_IFCR_TIFREC |
+				 SPI_IFCR_MODFC | SPI_IFCR_TSERFC | SPI_IFCR_SUSPC;
+	SPI2->CR1 |= SPI_CR1_SPE;
+	SPI2->CR1 |= SPI_CR1_CSTART;
+	NVIC_ClearPendingIRQ(SPI2_IRQn);
+	NVIC_EnableIRQ(SPI2_IRQn);
 }
 
 

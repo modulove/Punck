@@ -63,8 +63,10 @@ SECTIONS
   .text :
   {
     . = ALIGN(4);
-    *(.text)           /* .text sections (code) */
-    *(.text*)          /* .text* sections (code) */
+    /* modulove: the audio interrupt code runs from ITCM (see .itcm_text below), everything else from flash */
+    *(EXCLUDE_FILE(*voicemanager.o *kick.o *snare.o *hihat.o *toms.o *claps.o *samples.o *sequencer.o *main.o *bpfilter.o *karplusstring.o) .text)
+    *(EXCLUDE_FILE(*voicemanager.o *kick.o *snare.o *hihat.o *toms.o *claps.o *samples.o *sequencer.o *main.o *bpfilter.o *karplusstring.o) .text*)
+    *(.flash_text)     /* modulove: start-up / config functions of the ITCM objects (not used by the audio interrupt) */
     *(.glue_7)         /* glue arm to thumb code */
     *(.glue_7t)        /* glue thumb to arm code */
     *(.eh_frame)
@@ -137,8 +139,24 @@ SECTIONS
   {
     . = ALIGN(4);
     itcm_text_start = .;
+    . = . + 32;        /* modulove: no function at address 0 (a null function pointer must not hit real code) */
     *(.itcm_text)
     *(.itcm_text*)
+    /* modulove: the audio path (I2S interrupt, voices, master bus, triggers) runs from zero wait state ITCM:
+       it is ~4x larger than the 16 KB instruction cache, so from flash it was refetched every sample.
+       Copied from flash by SystemInit before the static constructors run. */
+    *voicemanager.o(.text .text*)
+    *kick.o(.text .text*)
+    *snare.o(.text .text*)
+    *hihat.o(.text .text*)
+    *toms.o(.text .text*)
+    *claps.o(.text .text*)
+    *samples.o(.text .text*)
+    *sequencer.o(.text .text*)
+    *main.o(.text .text*)
+    *bpfilter.o(.text .text*)
+    *karplusstring.o(.text .text*)
+    /* plaitssynth.o (Plaits FM / VA / Fold) runs from flash through the I-cache: ITCM is full */
     . = ALIGN(4);
     itcm_text_end = .;
   } >ITCMRAM AT> FLASH
@@ -172,6 +190,15 @@ SECTIONS
     . = ALIGN(4);
     _ebss = .;         /* define a global symbol at bss end */
     __bss_end__ = _ebss;
+  } >DTCMRAM
+
+  /* modulove: not cleared at start-up, so it survives a reset (crash record written by the fault handlers) */
+  .noinit (NOLOAD) :
+  {
+    . = ALIGN(4);
+    *(.noinit)
+    *(.noinit*)
+    . = ALIGN(4);
   } >DTCMRAM
 
   /* User_heap_stack section, used to check that there is enough "RAM_D1" Ram  type memory left */

@@ -54,6 +54,7 @@ public:
 	void SendString(const char* s);
 	void SendString(const std::string s);
 	size_t SendString(const unsigned char* s, size_t len);
+	void WaitTxFree();								// console output: wait (max 20 ms) until the previous transfer is done
 	void PauseEndpoint(USBHandler& handler);
 	void ResumeEndpoint(USBHandler& handler);
 	uint32_t StringToUnicode(const std::string_view desc, uint8_t* unicode);
@@ -64,6 +65,7 @@ public:
 	CDCHandler  cdc  = CDCHandler(this,  USB::CDC_In,  USB::CDC_Out,  CDCCmdInterface);
 	bool classPendingData = false;			// Set when class setup command received and data pending
 	DeviceState devState;
+	uint32_t ep0Aborts = 0;					// modulove: control transfers abandoned by the host and cleared (AbortEP0In)
 
 private:
 	enum class EP0State {Idle, Setup, DataIn, DataOut, StatusIn, StatusOut, Stall};
@@ -86,6 +88,8 @@ private:
 	void StdDevReq();
 	void EPStartXfer(const Direction direction, uint8_t endpoint, uint32_t xfer_len);
 	void EP0In(const uint8_t* buff, uint32_t size);
+	void AbortEP0In();
+	void EP0OutStart();
 	void CtlError();
 	bool ReadInterrupts(const uint32_t interrupt);
 	uint32_t MakeConfigDescriptor();
@@ -94,7 +98,9 @@ private:
 	std::array<USBHandler*, 4>classesByInterface;		// Lookup tables to get appropriate class handlers (set in handler constructor)
 	std::array<USBHandler*, 4>classByEP;
 	EP0State ep0State;
-	bool transmitting;
+	// modulove: one flag per IN endpoint (upstream had one shared flag: a mass storage or MIDI completion cleared it
+	// while a console transfer was still running, the next console line was started over it and the endpoint hung)
+	volatile bool transmitting[8] = {};
 	usbRequest req;
 
 	uint8_t stringDescr[128];

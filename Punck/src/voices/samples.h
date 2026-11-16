@@ -40,6 +40,9 @@ public:
 		Sample* sample;
 		const uint8_t* sampleAddress;
 		float playbackSpeed;				// Multiplier to allow faster or slow playback (and compensate for non 48k samples)
+		bool semitoneSteps = false;			// Key on and tune mode set: speed pot moves in semitone steps
+		uint16_t lastTuningADC = 0xFFFF;
+		float steppedSpeed = 1.0f;
 		float fractionalPosition;			// When playing sample at varying rate store how far through the current sample playback is
 		int32_t currentSamples[2] = {};		// Left/right sample levels for mixing
 		uint32_t bankLen;					// Number of samples in bank
@@ -48,12 +51,13 @@ public:
 		float velocityScale;
 		volatile uint16_t* voiceADC;
 		volatile uint16_t* tuningADC;
-		volatile uint16_t* levelADC;
+		uint32_t levelPot;						// modulove: VoiceManager::PotVoice (tapered Level pot, drive, pan)
 	} sampler[2];
 
 	Samples();
-	void Play(const uint8_t player, const uint32_t noteOffset, uint32_t noteRange, const float velocity);
+	void Play(const uint8_t player, const uint32_t noteOffset, uint32_t noteRange, const float velocity, const float pitch);
 	void Play(const uint8_t player, const uint32_t sampleNo);
+	uint32_t KnobIndex(const uint8_t player);			// Sample index selected by the Voice pot (bankLen = random mode)
 	void CalcOutput();
 	bool UpdateSampleList();
 	uint32_t SerialiseSampleNames(uint8_t** buff, const uint8_t voiceIndex);

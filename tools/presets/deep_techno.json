@@ -1,0 +1,89 @@
+{
+  "_description": "Deep/hypnotic techno for stock Punck engines: deep 46Hz kick with bright click (Attack knob audible), short snare, short crisp hats, perc toms, roomy clap",
+  "_notes": "Kick: Attack knob = tone (open = click), Decay knob = length. Snare: Filter open for snap, Tuning ~12 o'clock = 185 Hz. Hats: Decay knob CCW = tight 16ths.",
+  "Kick": {
+    "ramp1Inc": 0.4,
+    "ramp2Inc": 0.035,
+    "ramp3Inc": 0.5,
+    "fastSinFreq": 230.0,
+    "initSlowSinFreq": 46.0,
+    "sineSlowDownRate": 0.999995
+  },
+  "Snare": {
+    "noiseInitLevel": 1.0,
+    "noiseDecay": 0.9975,
+    "baseFreq": 185.0,
+    "basePos": 0.5,
+    "partialDecay": 0.9955,
+    "partialInitLevel": [
+      0.55,
+      0.35,
+      -0.2
+    ],
+    "partialFreqOffset": [
+      1.0,
+      1.588,
+      2.13
+    ]
+  },
+  "HiHat": {
+    "attackInc": 0.04,
+    "hpInitCutoff": 0.12,
+    "hpFinalCutoff": 0.34,
+    "hpCutoffInc": 1.01,
+    "lpInitCutoff": 0.85,
+    "lpFinalCutoff": 0.3,
+    "lpCutoffInc": 0.9999,
+    "noiseInitLevel": 1.4,
+    "noiseDecay": 0.999,
+    "partialScale": [
+      0.55,
+      0.35,
+      0.28,
+      0.28,
+      0.35,
+      0.28
+    ],
+    "partialFreq": [
+      683.0,
+      745.0,
+      1871.0,
+      2467.0,
+      3960.0,
+      6618.0
+    ]
+  },
+  "Toms": {
+    "decaySpeed": [
+      0.9992,
+      0.999
+    ],
+    "rampInc": 0.3,
+    "baseFreq": 70.0,
+    "sineFreqScale": [
+      1.0,
+      1.588
+    ],
+    "sineInitLevel": [
+      1.0,
+      0.0
+    ],
+    "sineSlowDownRate": 0.99996
+  },
+  "Claps": {
+    "initLevel": 5.0,
+    "reverbInitLevel": 3.5,
+    "initDecay": 0.9925,
+    "reverbDecay": 0.9993,
+    "filterCutoff": 1300.0,
+    "filterQ": 2.0,
+    "unfilteredNoiseLevel": 0.04
+  },
+  "Reverb": {
+    "reverbLevel": 0.006,
+    "mixerBaseDelay": 70.0,
+    "diffuserCount": 3.0,
+    "mixerChannels": 8.0,
+    "filterCutoff": 3000.0
+  }
+}

@@ -2,6 +2,7 @@
 #include "samples.h"
 #include "FatTools.h"
 #include "VoiceManager.h"
+#include "Dynamics.h"
 #include <cstring>
 #include <cmath>
 
@@ -12,12 +13,12 @@ Samples::Samples()
 	sampler[playerB].voiceADC = &ADC_array[ADC_SampleBVoice];
 	sampler[playerA].tuningADC = &ADC_array[ADC_SampleASpeed];
 	sampler[playerB].tuningADC = &ADC_array[ADC_SampleBSpeed];
-	sampler[playerA].levelADC = &ADC_array[ADC_SampleALevel];
-	sampler[playerB].levelADC = &ADC_array[ADC_SampleBLevel];
+	sampler[playerA].levelPot = VoiceManager::potSampleA;
+	sampler[playerB].levelPot = VoiceManager::potSampleB;
 }
 
 
-void Samples::Play(const uint8_t sp, uint32_t noteOffset, const uint32_t noteRange, const float velocity)
+void Samples::Play(const uint8_t sp, uint32_t noteOffset, const uint32_t noteRange, const float velocity, const float pitch)
 {
 	if (fatTools.noFileSystem || (sampler[sp].bankLen == 0)) {
 		return;
@@ -26,23 +27,29 @@ void Samples::Play(const uint8_t sp, uint32_t noteOffset, const uint32_t noteRan
 
 	// Get sample from sorted bank list based on player and note offset
 	if (noteOffset == sampler[sp].bankLen && sampler[sp].bankLen > 1) {		// Random mode
-		noteOffset = RNG->DR % (sampler[sp].bankLen - 1);
+		noteOffset = RNG->DR % sampler[sp].bankLen;						// upstream used bankLen - 1: last sample never chosen
 	} else {
 		noteOffset = (noteOffset < sampler[sp].bankLen) ? noteOffset : 0;	// If no sample at index use first sample in bank
 	}
 	sampler[sp].sample = sampler[sp].bank[noteOffset].s;
 	sampler[sp].sampleAddress = sampler[sp].sample->startAddr;
-	sampler[sp].playbackSpeed = static_cast<float>(sampler[sp].sample->sampleRate) / systemSampleRate;
-	sampler[sp].velocityScale = sampler[sp].sample->volume * velocity * (static_cast<float>(*sampler[sp].levelADC) / 32768.0f);
+	sampler[sp].fractionalPosition = 0.0f;
+	sampler[sp].playbackSpeed = pitch * static_cast<float>(sampler[sp].sample->sampleRate) / systemSampleRate;
+	sampler[sp].semitoneSteps = voiceManager.TuneActive(sp == playerA ? VoiceManager::samplerA : VoiceManager::samplerB);
+	sampler[sp].velocityScale = sampler[sp].sample->volume * velocity * voiceManager.LevelGain(sampler[sp].levelPot);
+}
+
+
+uint32_t Samples::KnobIndex(const uint8_t sp)
+{
+	return (*sampler[sp].voiceADC * (sampler[sp].bankLen + 1)) / 65536;		// Last position is random mode
 }
 
 
 void Samples::Play(const uint8_t sp, uint32_t index)
 {
 	// Samples played from button: use voice pot to determine note
-	index =  (*sampler[sp].voiceADC * (sampler[sp].bankLen + 1)) / 65536;		// Last position is random mode
-
-	Play(sp, index, 0, 1.0f);
+	Play(sp, KnobIndex(sp), 0, 1.0f, 1.0f);
 }
 
 
@@ -87,8 +94,15 @@ void Samples::CalcOutput()
 				sp.currentSamples[right] = sp.currentSamples[left];		// Duplicate left channel to right for mono signal
 			}
 
-			// Get sample speed from ADC - want range 0.5 - 1.5
-			const float adjSpeed = 0.5f + static_cast<float>(*sp.tuningADC) / 65536.0f;
+			// Get sample speed from ADC - want range 0.5 - 1.5 (key on and sampler tune mode set: semitone steps)
+			float adjSpeed = 0.5f + static_cast<float>(*sp.tuningADC) / 65536.0f;
+			if (sp.semitoneSteps) {
+				if (*sp.tuningADC != sp.lastTuningADC) {
+					sp.lastTuningADC = *sp.tuningADC;
+					sp.steppedSpeed = dyn::FastExp2(std::round(12.0f * dyn::FastLog2(adjSpeed)) / 12.0f);
+				}
+				adjSpeed = sp.steppedSpeed;
+			}
 
 			// Split the next position into an integer jump and fractional position
 			float addressJump;			// Integral part of position
@@ -110,14 +124,17 @@ void Samples::CalcOutput()
 	}
 
 	if (playing) {
-		// Mix samples for final output to DAC
-		outputLevel[left] = intToFloatMult *
-				(sampler[playerA].velocityScale * sampler[playerA].currentSamples[left] +
-				 sampler[playerB].velocityScale * sampler[playerB].currentSamples[left]);
-
-		outputLevel[right] = intToFloatMult *
-				(sampler[playerA].velocityScale * sampler[playerA].currentSamples[right] +
-				 sampler[playerB].velocityScale * sampler[playerB].currentSamples[right]);
+		// Mix samples for final output to DAC (modulove: each player with its Level pot drive and pan)
+		float mix[2] = {0.0f, 0.0f};
+		for (uint32_t p = 0; p < 2; ++p) {
+			float l = intToFloatMult * sampler[p].velocityScale * sampler[p].currentSamples[left];
+			float r = intToFloatMult * sampler[p].velocityScale * sampler[p].currentSamples[right];
+			voiceManager.Shape(sampler[p].levelPot, p == playerA ? VoiceManager::samplerA : VoiceManager::samplerB, l, r);
+			mix[left] += l;
+			mix[right] += r;
+		}
+		outputLevel[left] = mix[left];
+		outputLevel[right] = mix[right];
 	}
 }
 
@@ -271,26 +288,26 @@ uint32_t Samples::SerialiseSampleNames(uint8_t** buff, const uint8_t voiceIndex)
 	uint8_t s = 0;
 	for (; s < sampler[voiceIndex].bankLen + 1; ++s) {
 		// overflow checking
-		if ((uint32_t)((s * 8) + 8) >= sizeof(configManager.configBuffer)) {
+		if ((uint32_t)((s * 8) + 8) >= sizeof(configManager.rxBuffer)) {
 			break;
 		}
 
 		if (s < sampler[voiceIndex].bankLen) {
 			const char* sampleName = sampler[voiceIndex].bank[s].s->name;
-			memcpy(configManager.configBuffer + (s * 8), sampleName, 8);
+			memcpy(configManager.rxBuffer + (s * 8), sampleName, 8);
 		} else {
 			// Create dummy name for random mode
-			strncpy((char*)configManager.configBuffer + (s * 8), "-Random-", 8);
+			strncpy((char*)configManager.rxBuffer + (s * 8), "-Random-", 8);
 		}
 	}
 
 	// Check that there are no characters with ASCII code > 127 for sysex transmission (replace with "_")
 	for (uint8_t i = 0; i < s * 8; ++i) {
-		if (configManager.configBuffer[i] & 0x80) {
-			configManager.configBuffer[i] = '_';
+		if (configManager.rxBuffer[i] & 0x80) {
+			configManager.rxBuffer[i] = '_';
 		}
 	}
-	*buff = configManager.configBuffer;
+	*buff = configManager.rxBuffer;
 	return s * 8;
 }
 

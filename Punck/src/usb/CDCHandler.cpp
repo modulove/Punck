@@ -104,7 +104,18 @@ void CDCHandler::ProcessCommand()
 				"dir         -  Print list of all files and their directories\r\n"
 				"samplelist  -  Show details of all samples found in flash\r\n"
 				"midimap     -  Display MIDI note mapping\r\n"
-				"midichn:x   -  Set MIDI channel (0 = omni)\r\n"
+				"midichn:x   -  Set drum map MIDI channel (0 = omni)\r\n"
+				"pitchchn:v,c   Set chromatic channel c (0 = off) for voice v (1-7, order as midimap)\r\n"
+				"mix         -  Show master bus (compressor, clipper) and ducking settings\r\n"
+				"mix:i,v     -  Set mix setting i to value v (saveconfig to keep)\r\n"
+				"cpu         -  Audio CPU load and compressor / clipper meter\r\n"
+				"crash       -  Reset reason and last fault (the module restarts after a fault); crash:0 clears\r\n"
+				"status      -  Switch position, sound engines, held buttons\r\n"
+				"pots        -  Pot positions\r\n"
+				"cfg         -  Settings storage info (settings save automatically 3 s after a change)\r\n"
+				"engine:v,e  -  Set engine e (from 1) on voice v (1 kick, 2 snare, 3 hats, 6 toms/bass)\r\n"
+				"play:v,vel,o   Trigger voice v (1-7) with velocity and note offset\r\n"
+				"tone:f,dB   -  Test sine (dB re clipper ceiling) replacing the output; tone:0 = off\r\n"
 				"reboot      -  Reboot device\r\n"
 				"leds:x      -  Set all LEDs to brightness from 1-100%\r\n"
 				"revertleds  -  Reset all LEDs\r\n"
@@ -169,6 +180,163 @@ void CDCHandler::ProcessCommand()
 		printf("I2C Underrun: %ld\r\n", i2sUnderrun);
 #endif
 
+	} else if (cmd.compare("crash") == 0 || cmd.compare("crash:0") == 0) {	// Last fault (restart) and reset reason
+		const uint32_t r = resetFlags;
+		printf("Reset reason:%s%s%s%s%s%s%s\r\n", (r & RCC_RSR_PORRSTF) ? " power-on" : "", (r & RCC_RSR_BORRSTF) ? " brownout" : "",
+				(r & RCC_RSR_PINRSTF) ? " pin" : "", (r & RCC_RSR_SFTRSTF) ? " software/fault" : "",
+				(r & RCC_RSR_IWDG1RSTF) ? " watchdog" : "", (r & RCC_RSR_WWDG1RSTF) ? " window-watchdog" : "",
+				(r & RCC_RSR_LPWRRSTF) ? " low-power" : "");
+		static constexpr const char* types[] = {"-", "hard fault", "memory fault", "bus fault", "usage fault"};
+		printf("Faults since power on: %lu", crashRecord.count);
+		if (crashRecord.count > 0) {
+			printf("  last: %s at pc 0x%08lx lr 0x%08lx after %lu ms  CFSR 0x%08lx HFSR 0x%08lx MMFAR 0x%08lx BFAR 0x%08lx",
+					types[crashRecord.type < 5 ? crashRecord.type : 0], crashRecord.pc, crashRecord.lr, crashRecord.uptimeMs,
+					crashRecord.cfsr, crashRecord.hfsr, crashRecord.mmfar, crashRecord.bfar);
+		}
+		printf("\r\n");
+		if (cmd.compare("crash:0") == 0) {
+			crashRecord.count = 0;
+			crashRecord.type = 0;
+			printf("Fault record cleared\r\n");
+		}
+
+	} else if (cmd.compare("crashtest") == 0) {					// Deliberate fault: checks that the module records it and restarts
+		printf("Faulting now: the module restarts, then 'crash' shows the record\r\n");
+		const uint32_t start = SysTickVal;
+		while (SysTickVal - start < 50) {}						// let the line go out over USB first
+		__builtin_trap();
+
+	} else if (cmd.compare("cpu") == 0) {						// Audio CPU load and master bus meter
+		VoiceManager::Meter m;
+		voiceManager.GetMeter(m);
+		printf("CPU avg: %.1f%%  max: %.1f%%  underruns: %lu  uptime: %lu s  crashes: %lu\r\n", m.cpuAvg, m.cpuMax, i2sUnderrun,
+				SysTickVal / 1000, crashRecord.count);
+		printf("Audio rate: %lu/s (48000)  I2S restarts: %lu%s  USB EP0 aborts: %lu  clock %lu MHz\r\n", audioRate, i2sRestarts,
+				i2sRestarts ? "  <- rate watchdog fired" : "", usb->ep0Aborts, SystemCoreClock / 1000000);
+		if (i2sRestarts) {
+			printf("Last bad rate: %lu/s\r\n", lastBadRate);
+		}
+		{
+			const auto& n = voiceManager.nanEvents;
+			uint32_t total = 0;
+			for (auto v : n) {
+				total += v;
+			}
+			if (total) {
+				printf("NaN/inf recoveries: kick %lu snare %lu hats %lu samples %lu toms %lu claps %lu reverb %lu bus %lu out %lu\r\n",
+						n[0], n[1], n[2], n[3] + n[4], n[5], n[6], n[VoiceManager::nanReverb], n[VoiceManager::nanBus], n[VoiceManager::nanOut]);
+			}
+		}
+		printf("Comp reduction max: %.1f dB  into clipper: %+.1f dB  output peak: %+.1f dBFS\r\n", m.reductionDb, m.clipDb, m.peakDb);
+		static constexpr const char* blocks[] = {"kick", "snare", "hats", "samples", "-", "toms", "claps", "reverb", "master", "trig"};
+		printf("Cycles avg/max per sample (budget %lu):", SystemCoreClock / 48000);
+		for (uint32_t i = 0; i < VoiceManager::profCount; ++i) {
+			if (i != VoiceManager::Voice::samplerB) {
+				printf(" %s %.0f/%.0f", blocks[i], voiceManager.profAvg[i], voiceManager.profMax[i]);
+				voiceManager.profMax[i] = 0.0f;
+			}
+		}
+		printf("\r\n");
+
+	} else if (cmd.compare("status") == 0) {					// Switch position and sound engines
+		static constexpr const char* kickNames[] = {"classic", "deep", "punch", "fm", "rumble"};
+		static constexpr const char* snareNames[] = {"classic", "808", "909", "rim", "modal", "string", "bongo"};
+		static constexpr const char* tomNames[] = {"toms", "bass", "pluck", "fm", "va", "fold"};
+		static constexpr const char* hatNames[] = {"classic", "808", "909"};
+		printf("Switch: %s\r\n", voiceManager.ButtonModeName());
+		const uint8_t k = voiceManager.kickPlayer.GetEngine(), s = voiceManager.snarePlayer.GetEngine(), h = voiceManager.hihatPlayer.GetEngine();
+		const uint8_t t = voiceManager.tomsPlayer.GetEngine();
+		printf("Kick  engine %d (%s)\r\nSnare engine %d (%s)\r\nHats  engine %d (%s)\r\nToms  engine %d (%s)  (voice 6, MIDI only)\r\n",
+				k + 1, kickNames[k % 5], s + 1, snareNames[s % 7], h + 1, hatNames[h % 3], t + 1, tomNames[t % 6]);
+		printf("Buttons held:");
+		for (auto& nm : voiceManager.noteMapper) {
+			if (nm.trigger.ButtonHeld()) {
+				printf(" %d", nm.voice + 1);
+			}
+		}
+		printf("\r\n");
+
+	} else if (cmd.compare("cfg") == 0) {						// Settings storage info
+		uint32_t latest = 0;
+		const uint32_t freePos = configManager.FindRecords(latest);
+		printf("Settings: newest record at %lu, free from %lu of %lu bytes; saves since boot %lu, erases %lu; save pending: %s\r\n",
+				latest, freePos, configManager.sectorSize, configManager.saveCount, configManager.eraseCount,
+				configManager.scheduleSave ? "yes" : "no");
+		printf("Failed saves (retried on an erased sector): %lu  last flash error 0x%08lx  bank 2 SR 0x%08lx CR 0x%08lx\r\n",
+				configManager.failedSaves, configManager.lastFlashError, FLASH->SR2, FLASH->CR2);
+
+	} else if (cmd.compare("pots") == 0) {						// Pot positions (0 - 100 %)
+		static constexpr const char* names[] = {"Kick attack", "Kick decay", "Kick level", "Snare filter", "Snare tuning", "Snare level",
+				"Sample A level", "Sample B level", "Tempo", "Hats decay", "Hats level", "Sample A voice", "Sample A speed",
+				"Sample B voice", "Sample B speed"};
+		for (uint32_t i = 0; i < ADC1_BUFFER_LENGTH + ADC2_BUFFER_LENGTH; ++i) {
+			printf("%-15s %5.1f %%\r\n", names[i], ADC_array[i] / 655.35f);
+		}
+
+	} else if (cmd.compare(0, 7, "engine:") == 0) {				// engine:v,e  set engine e (1 = first, as blinked) on voice v (1 kick, 2 snare, 3 hats)
+		int v = 0, e = 0;
+		if (sscanf(cmd.data() + 7, "%d,%d", &v, &e) == 2 && v >= 1 && v <= VoiceManager::Voice::count && e >= 1) {
+			voiceManager.RequestEngine(v - 1, e - 1);
+			printf("Voice %d engine %d\r\n", v, e);
+		} else {
+			printf("Format: engine:voice,engine  (voice 1 kick, 2 snare, 3 hats; engine from 1)\r\n");
+		}
+
+	} else if (cmd.compare(0, 5, "play:") == 0) {				// play:v[,velocity 1-127[,note offset]][;v,...]  trigger voices (test recordings)
+		const char* p = cmd.data() + 5;
+		while (p && *p) {
+			int v = 0, vel = 100, offset = 0;
+			const int n = sscanf(p, "%d,%d,%d", &v, &vel, &offset);
+			if (n >= 1 && v >= 1 && v <= VoiceManager::Voice::count) {
+				NoteMapper& nm = voiceManager.noteMapper[v - 1];
+				const uint32_t range = nm.midiHigh - nm.midiLow + 1;
+				if (nm.drumVoice) {
+					nm.drumVoice->QueuePlay(nm.voiceIndex, std::min((uint32_t)std::max(offset, 0), range - 1), range, std::clamp(vel, 1, 127) / 127.0f);
+				}
+			}
+			p = strchr(p, ';');
+			if (p) {
+				++p;
+			}
+		}
+
+	} else if (cmd.compare(0, 5, "tone:") == 0) {				// tone:freq,dB  test sine replacing the output (dB re clipper ceiling), tone:0 = off
+		char* end = nullptr;
+		const float f = strtof(cmd.data() + 5, &end);
+		const float db = (end && *end == ',') ? strtof(end + 1, nullptr) : -20.0f;
+		voiceManager.SetTestTone(f, db);
+		if (f > 0.0f) {
+			printf("Test tone %.0f Hz at %.1f dB\r\n", f, db);
+		} else {
+			printf("Test tone off\r\n");
+		}
+
+	} else if (cmd.compare(0, 3, "mix") == 0) {					// Show or set master bus / ducking parameters: mix or mix:index,value
+		static constexpr const char* names[] = {"duckDrums", "duckSamplers", "duckReverb", "duckHoldMs", "duckReleaseMs", "kickReverbSend",
+				"compOn", "compThreshold dB", "compRatio", "compAttack ms", "compRelease ms", "compKnee dB", "compMakeup dB", "compMix",
+				"compScHpf Hz", "compKick", "clipMode 0 tanh 1 clean 2 hard 3 warm", "clipDrive dB", "outTrim dB", "inputTrim dB",
+				"keyRoot -1 off, 0 C .. 11 B", "keyScale 0 min 1 dor 2 phr ..", "tune kick 0 off 1 root 2 r+5 3 scale 4 pent",
+				"tune snare", "tune hats", "tune sample A", "tune sample B", "tune toms / bass", "tune claps",
+				"pan kick -1 L .. 1 R", "pan snare", "pan hats", "pan sample A", "pan sample B", "pan toms / bass", "pan claps",
+				"driveMaxDb (Level pot top)"};
+		constexpr uint32_t count = sizeof(VoiceManager::MixConfig) / sizeof(float);
+		static_assert(sizeof(names) / sizeof(names[0]) == count, "mix names out of sync with MixConfig");
+		float* values = reinterpret_cast<float*>(&voiceManager.mixConfig);
+		if (cmd.size() > 4 && cmd[3] == ':') {
+			char* end = nullptr;
+			const long idx = strtol(cmd.data() + 4, &end, 10);	// nano.specs has no scanf float support: parse by hand
+			if (end && *end == ',' && idx >= 0 && idx < (long)count) {
+				values[idx] = strtof(end + 1, nullptr);
+				voiceManager.StoreMixConfig(nullptr, 0);		// Recalculate coefficients
+				configManager.ScheduleSave();
+			} else {
+				printf("Format: mix:index,value\r\n");
+			}
+		}
+		for (uint32_t i = 0; i < count; ++i) {
+			printf("%2lu %-30s %8.2f\r\n", i, names[i], values[i]);
+		}
+
 	} else if (cmd.compare("resettiming") == 0) {				// Print timing debug info
 		loopTime = 0;
 		maxLoopTime = 0;
@@ -225,8 +393,19 @@ void CDCHandler::ProcessCommand()
 			printf("MIDI Channel: %d\r\n", voiceManager.midiChannel);
 		}
 
+	} else if (cmd.compare(0, 9, "pitchchn:") == 0) {			// Set chromatic MIDI channel for a voice
+		int v = 0, c = -1;
+		if (sscanf(cmd.data() + 9, "%d,%d", &v, &c) == 2 && v >= 1 && v <= VoiceManager::Voice::count && c >= 0 && c <= 16) {
+			voiceManager.noteMapper[v - 1].pitchChannel = c;
+			configManager.SaveConfig();
+			printf("Voice %d pitch channel: %d\r\n", v, c);
+		} else {
+			printf("Format: pitchchn:voice,channel  (voice 1-7, channel 0-16)\r\n");
+		}
+
 	} else if (cmd.compare("midimap") == 0) {					// Display MIDI note mapping
-		printf("MIDI mapping: Channel: %d\r\n", voiceManager.midiChannel);
+		printf("MIDI mapping: drum channel: %d (0 = omni); chromatic note %d = base pitch\r\n", voiceManager.midiChannel, VoiceManager::pitchRefNote);
+		printf("Voice      Low High  PitchChn\r\n");
 		for (auto note : voiceManager.noteMapper) {
 			switch (note.voice) {
 			case VoiceManager::kick:
@@ -251,7 +430,7 @@ void CDCHandler::ProcessCommand()
 				printf("Claps   ");
 				break;
 			}
-			printf(" : %3d, %3d\r\n", note.midiLow, note.midiHigh);
+			printf(" : %3d, %3d   %2d\r\n", note.midiLow, note.midiHigh, note.pitchChannel);
 		}
 
 

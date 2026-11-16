@@ -143,6 +143,16 @@ void SystemInit (void)
  __IO uint32_t tmpreg;
 #endif /* DATA_IN_D2_SRAM */
 
+  /* modulove: copy the audio code into ITCM (linker script .itcm_text) before the static constructors run */
+  {
+    extern uint32_t itcm_data, itcm_text_start, itcm_text_end;
+    volatile uint32_t* dst = &itcm_text_start;
+    const volatile uint32_t* src = &itcm_data;
+    while (dst < &itcm_text_end) {
+      *dst++ = *src++;
+    }
+  }
+
   /* FPU settings ------------------------------------------------------------*/
   #if (__FPU_PRESENT == 1) && (__FPU_USED == 1)
     SCB->CPACR |= ((3UL << (10*2))|(3UL << (11*2)));  /* set CP10 and CP11 Full Access */

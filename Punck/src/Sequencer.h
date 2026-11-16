@@ -22,6 +22,8 @@ public:
 	void StartStop(uint8_t sequence);
 	void Play();
 	SeqInfo GetSeqInfo(uint8_t seq);
+	bool IsEmpty(uint8_t seq);				// True if the sequence contains no hits
+	float SixteenthSamples() { return playing ? (18000.0f - tempo) : 0.0f; }	// Length of a 16th at the internal tempo
 
 	uint32_t GetBar(uint8_t** buff, uint8_t seq, uint8_t bar);
 	uint32_t GetSequences(uint8_t** buff);

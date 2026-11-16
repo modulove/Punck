@@ -99,6 +99,7 @@ void USB::InterruptHandler()					// In Drivers\STM32F4xx_HAL_Driver\Src\stm32f4x
 
 						ep0State = EP0State::Idle;
 						USBx_OUTEP(epnum)->DOEPCTL |= USB_OTG_DOEPCTL_STALL;
+						EP0OutStart();			// modulove: data / status OUT stage done: ready for the next SETUP
 					} else {
 						// Call appropriate data handler depending on endpoint of data
 						if (classByEP[epnum]->outBuffPackets <= 1) {
@@ -114,6 +115,7 @@ void USB::InterruptHandler()					// In Drivers\STM32F4xx_HAL_Driver\Src\stm32f4x
 
 					USBUpdateDbg({}, req, {}, {}, {}, nullptr);
 
+					AbortEP0In();		// modulove: a new SETUP ends any control transfer the host gave up on
 					ep0State = EP0State::Setup;
 
 					switch (req.RequestType & 0x1F) {		// originally USBD_LL_SetupStage
@@ -141,7 +143,7 @@ void USB::InterruptHandler()					// In Drivers\STM32F4xx_HAL_Driver\Src\stm32f4x
 						break;
 					}
 
-					USBx_OUTEP(epnum)->DOEPINT = USB_OTG_DOEPINT_STUP;				// Clear interrupt
+					USBx_OUTEP(epnum)->DOEPINT = USB_OTG_DOEPINT_STUP | USB_OTG_DOEPINT_STPKTRX;	// Clear interrupt (STPKTRX as in ST's HAL)
 				}
 
 				if ((epint & USB_OTG_DOEPINT_OTEPDIS) == USB_OTG_DOEPINT_OTEPDIS) {	// OUT token received when endpoint disabled
@@ -192,10 +194,12 @@ void USB::InterruptHandler()					// In Drivers\STM32F4xx_HAL_Driver\Src\stm32f4x
 							USBUpdateDbg({}, {}, {}, ep0.inBuffSize, {}, (uint32_t*)ep0.inBuff);
 
 							EPStartXfer(Direction::in, 0, ep0.inBuffSize);
+						} else {
+							EP0OutStart();		// modulove: status stage (zero length IN) done: ready for the next SETUP
 						}
 					} else {
+						transmitting[epnum] = false;	// before DataIn: it may start a follow-up zero length packet (sets it again)
 						classByEP[epnum]->DataIn();
-						transmitting = false;
 					}
 				}
 
@@ -302,6 +306,9 @@ void USB::InterruptHandler()					// In Drivers\STM32F4xx_HAL_Driver\Src\stm32f4x
 			USBx_OUTEP(0U)->DOEPTSIZ = (1U << 19) | (3U * 8U) | USB_OTG_DOEPTSIZ_STUPCNT;
 		}
 
+		for (auto& t : transmitting) {
+			t = false;							// modulove: transfers in progress are gone after a bus reset
+		}
 		USB_OTG_FS->GINTSTS &= USB_OTG_GINTSTS_USBRST;
 	}
 
@@ -744,6 +751,9 @@ void USB::EPStartXfer(const Direction direction, uint8_t endpoint, uint32_t xfer
 	if (direction == Direction::in) {
 
 		endpoint = endpoint & EP_ADDR_MASK;					// Strip out 0x80 if endpoint passed eg as 0x81
+		if (endpoint != 0) {
+			transmitting[endpoint] = true;					// modulove: set before the endpoint is enabled (cleared on XFRC)
+		}
 
 		if (endpoint == 0 && xfer_len > ep_maxPacket) {		// If the transfer is larger than the maximum packet size send the maximum size and use the remaining flag to trigger a second send
 			ep0.inBuffRem = xfer_len - ep_maxPacket;
@@ -752,7 +762,11 @@ void USB::EPStartXfer(const Direction direction, uint8_t endpoint, uint32_t xfer
 
 		USBx_INEP(endpoint)->DIEPTSIZ &= ~(USB_OTG_DIEPTSIZ_XFRSIZ | USB_OTG_DIEPTSIZ_PKTCNT);
 
-		USBx_INEP(endpoint)->DIEPTSIZ |= (USB_OTG_DIEPTSIZ_PKTCNT & (((xfer_len + ep_maxPacket - 1) / ep_maxPacket) << USB_OTG_DIEPTSIZ_PKTCNT_Pos));
+		// modulove: a zero length packet (control status stage) needs PKTCNT = 1, as in ST's HAL. Upstream wrote 0: the
+		// core then counted below zero (EP0 PKTCNT read back 3), the transfer never completed and every following
+		// control request hung - opening the COM port blocked until the module was restarted (stress test 2026-11-16)
+		const uint32_t packets = (xfer_len == 0) ? 1 : (xfer_len + ep_maxPacket - 1) / ep_maxPacket;
+		USBx_INEP(endpoint)->DIEPTSIZ |= (USB_OTG_DIEPTSIZ_PKTCNT & (packets << USB_OTG_DIEPTSIZ_PKTCNT_Pos));
 		USBx_INEP(endpoint)->DIEPTSIZ |= (USB_OTG_DIEPTSIZ_XFRSIZ & xfer_len);
 
 		USBx_INEP(endpoint)->DIEPCTL |= (USB_OTG_DIEPCTL_CNAK | USB_OTG_DIEPCTL_EPENA);		// EP enable, IN data in FIFO
@@ -777,6 +791,40 @@ void USB::EPStartXfer(const Direction direction, uint8_t endpoint, uint32_t xfer
 
 		USBx_OUTEP(endpoint)->DOEPCTL |= (USB_OTG_DOEPCTL_CNAK | USB_OTG_DOEPCTL_EPENA);		// EP enable
 	}
+}
+
+
+// modulove: ready EP0 for the next SETUP after every completed control transfer, as ST's HAL does (USB_EP0_OutStart,
+// slave mode): PKTCNT 1, XFRSIZ 3 x 8, STUPCNT 3 - not while EP0 OUT is armed for a data or status stage. Upstream did
+// this only at bus reset, so the SETUP counter ran down: in the stress test STUPCNT read 0 and a received SETUP was never
+// processed, after which opening the COM port hung until the module was restarted.
+void USB::EP0OutStart()
+{
+	if ((USBx_OUTEP(0)->DOEPCTL & USB_OTG_DOEPCTL_EPENA) == 0) {
+		USBx_OUTEP(0)->DOEPTSIZ = (1U << 19) | (3U * 8U) | USB_OTG_DOEPTSIZ_STUPCNT;
+	}
+}
+
+
+// modulove: called for every new SETUP. If an EP0 IN transfer is still armed, the host has abandoned that control
+// transfer (it timed out, e.g. while the audio interrupt kept this lower priority interrupt waiting) - stop it and
+// flush TxFIFO 0 so the reply to the new request starts clean. All waits are bounded.
+void USB::AbortEP0In()
+{
+	ep0.inBuffRem = 0;
+	if ((USBx_INEP(0)->DIEPCTL & USB_OTG_DIEPCTL_EPENA) == 0) {
+		return;
+	}
+	USBx_INEP(0)->DIEPCTL |= USB_OTG_DIEPCTL_SNAK;
+	for (uint32_t i = 0; i < 10000 && (USBx_INEP(0)->DIEPINT & USB_OTG_DIEPINT_INEPNE) == 0; ++i) {}
+	USBx_INEP(0)->DIEPCTL |= USB_OTG_DIEPCTL_EPDIS;
+	for (uint32_t i = 0; i < 10000 && (USBx_INEP(0)->DIEPINT & USB_OTG_DIEPINT_EPDISD) == 0; ++i) {}
+	USBx_INEP(0)->DIEPINT = USB_OTG_DIEPINT_EPDISD | USB_OTG_DIEPINT_INEPNE;
+	for (uint32_t i = 0; i < 10000 && (USB_OTG_FS->GRSTCTL & USB_OTG_GRSTCTL_AHBIDL) == 0; ++i) {}
+	USB_OTG_FS->GRSTCTL = USB_OTG_GRSTCTL_TXFFLSH | (0 << USB_OTG_GRSTCTL_TXFNUM_Pos);	// flush TxFIFO 0
+	for (uint32_t i = 0; i < 10000 && (USB_OTG_FS->GRSTCTL & USB_OTG_GRSTCTL_TXFFLSH) != 0; ++i) {}
+	USBx_DEVICE->DIEPEMPMSK &= ~1UL;
+	++ep0Aborts;
 }
 
 
@@ -822,13 +870,13 @@ void USB::ResumeEndpoint(USBHandler& handler)
 size_t USB::SendData(const uint8_t* data, const uint16_t len, uint8_t endpoint)
 {
 	endpoint &= EP_ADDR_MASK;
-	if (devState == DeviceState::Configured && !transmitting) {
-		transmitting = true;
+	// modulove: busy check per endpoint, and no change to the EP0 state (upstream set ep0State = DataIn for every
+	// endpoint, which made the next EP0 status completion look like the end of a control read)
+	if (devState == DeviceState::Configured && !transmitting[endpoint]) {
 		classByEP[endpoint]->inBuff = data;
 		classByEP[endpoint]->inBuffSize = len;
 		classByEP[endpoint]->inBuffCount = 0;
-		ep0State = EP0State::DataIn;
-		EPStartXfer(Direction::in, endpoint, len);
+		EPStartXfer(Direction::in, endpoint, len);			// sets transmitting[endpoint]
 		return len;
 	} else {
 		return 0;
@@ -836,12 +884,20 @@ size_t USB::SendData(const uint8_t* data, const uint16_t len, uint8_t endpoint)
 }
 
 
+extern volatile uint32_t SysTickVal;
+void USB::WaitTxFree()
+{
+	// modulove: console output (main loop only) waits up to 20 ms for the previous IN transfer. The old wait counted
+	// 10000 loops on a non-volatile flag, which the optimiser reduces to nothing, so most lines were dropped.
+	const uint32_t start = SysTickVal;
+	while (transmitting[CDC_In & EP_ADDR_MASK] && devState == DeviceState::Configured && SysTickVal - start < 20) {
+	}
+}
+
+
 void USB::SendString(const char* s)
 {
-	uint16_t counter = 0;
-	while (transmitting && counter < 10000) {
-		++counter;
-	}
+	WaitTxFree();
 	SendData((uint8_t*)s, strlen(s), CDC_In);
 }
 
@@ -854,10 +910,7 @@ void USB::SendString(const std::string s)
 
 size_t USB::SendString(const unsigned char* s, size_t len)
 {
-	uint16_t counter = 0;
-	while (transmitting && counter < 10000) {
-		++counter;
-	}
+	WaitTxFree();
 	return SendData((uint8_t*)s, len, CDC_In);
 }
 

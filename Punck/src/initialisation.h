@@ -8,6 +8,17 @@
 
 extern volatile uint32_t SysTickVal;
 
+// modulove: a fault (hard / memory / bus / usage) records where it happened and restarts the module instead of
+// hanging. The record lives in .noinit (not cleared at start-up) so it survives the reset; console 'crash' shows it.
+struct CrashRecord {
+	uint32_t magic, count, type, pc, lr, cfsr, hfsr, mmfar, bfar, uptimeMs;
+};
+static constexpr uint32_t crashMagic = 0x43524153;		// 'CRAS'
+extern volatile CrashRecord crashRecord;
+extern uint32_t resetFlags;								// RCC->RSR at boot (reset reason)
+
+// modulove: start-up / config code of the ITCM objects stays in flash (ITCM is reserved for the audio interrupt)
+#define FLASH_CODE __attribute__((section(".flash_text")))
 #define TIMINGDEBUG false					// Capture detailed timing information
 
 #define ADC1_BUFFER_LENGTH 8
@@ -24,6 +35,15 @@ static constexpr float systemMaxFreq = 22000.0f;
 
 extern volatile uint16_t ADC_array[ADC1_BUFFER_LENGTH + ADC2_BUFFER_LENGTH];
 extern uint32_t i2sUnderrun;					// Debug counter for I2S underruns
+
+// Audio interrupt load, measured with the DWT cycle counter (fraction of the 48 kHz sample period)
+struct CpuLoad {
+	volatile float avg = 0.0f;
+	volatile float max = 0.0f;
+	uint32_t lastStart = 0;
+};
+extern CpuLoad cpuLoad;
+void InitCycleCounter();
 
 // Define ADC array positions of various controls
 enum ADC_Controls {
@@ -72,3 +92,8 @@ void InitRNG();
 void InitPWMTimer();
 void DelayMS(uint32_t ms);
 void Reboot();
+void RestartI2S();
+
+// modulove: audio rate watchdog (main loop): interrupt calls per second, I2S restarts, last rate that caused one
+extern uint32_t audioRate, i2sRestarts, lastBadRate;
+extern uint32_t cpuClockMHz;							// 480 on revision V devices, else 400 (InitClocks)

@@ -1,0 +1,33 @@
+{
+  "_description": "Upstream Punck factory defaults (from the firmware source) - to get back to the original sound",
+  "Kick": {
+    "ramp1Inc": 0.22, "ramp2Inc": 0.015, "ramp3Inc": 0.3,
+    "fastSinFreq": 130.0, "initSlowSinFreq": 60.0, "sineSlowDownRate": 0.999985
+  },
+  "Snare": {
+    "noiseInitLevel": 1.0, "noiseDecay": 0.9982,
+    "baseFreq": 150.0, "basePos": 0.5,
+    "partialDecay": 0.9982,
+    "partialInitLevel": [0.7, 0.5, -0.4],
+    "partialFreqOffset": [1.0, 1.588, 1.833]
+  },
+  "HiHat": {
+    "attackInc": 0.005,
+    "hpInitCutoff": 0.07, "hpFinalCutoff": 0.27, "hpCutoffInc": 1.01,
+    "lpInitCutoff": 0.5, "lpFinalCutoff": 0.1, "lpCutoffInc": 0.99998,
+    "noiseInitLevel": 0.99, "noiseDecay": 0.9998,
+    "partialScale": [0.8, 0.5, 0.4, 0.4, 0.5, 0.4],
+    "partialFreq": [569.0, 621.0, 1559.0, 2056.0, 3300.0, 5515.0]
+  },
+  "Toms": {
+    "decaySpeed": [0.9995, 0.9993], "rampInc": 0.2, "baseFreq": 60.0,
+    "sineFreqScale": [1.0, 1.588], "sineInitLevel": [1.0, 0.0], "sineSlowDownRate": 0.99995
+  },
+  "Claps": {
+    "initLevel": 5.0, "reverbInitLevel": 4.0, "initDecay": 0.993, "reverbDecay": 0.999,
+    "filterCutoff": 1250.0, "filterQ": 3.0, "unfilteredNoiseLevel": 0.06
+  },
+  "Reverb": {
+    "reverbLevel": 0.01, "mixerBaseDelay": 75.0, "diffuserCount": 2.0, "mixerChannels": 8.0, "filterCutoff": 2400.0
+  }
+}

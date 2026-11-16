@@ -1,0 +1,42 @@
+{
+  "_description": "Dub techno / deep house: round 50Hz kick with slow glide, snare voice turned into a woody rim/clave, softer darker hats, zappy perc toms, long dark reverb",
+  "_notes": "Snare Tuning knob now moves the rim between ~190 and ~570 Hz. Turn kick Decay up for long dub kicks. Reverb is long - keep the clap/rim sparse.",
+  "Kick": {
+    "ramp1Inc": 0.22, "ramp2Inc": 0.02, "ramp3Inc": 0.30,
+    "fastSinFreq": 140.0,
+    "initSlowSinFreq": 50.0,
+    "sineSlowDownRate": 0.999994
+  },
+  "Snare": {
+    "noiseInitLevel": 0.12, "noiseDecay": 0.990,
+    "baseFreq": 380.0, "basePos": 1.2,
+    "partialDecay": 0.9950,
+    "partialInitLevel": [0.8, 0.45, 0.25],
+    "partialFreqOffset": [1.0, 2.2, 3.7]
+  },
+  "HiHat": {
+    "attackInc": 0.02,
+    "hpInitCutoff": 0.10, "hpFinalCutoff": 0.28, "hpCutoffInc": 1.01,
+    "lpInitCutoff": 0.60, "lpFinalCutoff": 0.15, "lpCutoffInc": 0.99998,
+    "noiseInitLevel": 1.0, "noiseDecay": 0.9997,
+    "partialScale": [0.8, 0.5, 0.4, 0.4, 0.5, 0.4],
+    "partialFreq": [569.0, 621.0, 1559.0, 2056.0, 3300.0, 5515.0]
+  },
+  "Toms": {
+    "decaySpeed": [0.9992, 0.9990],
+    "rampInc": 0.3,
+    "baseFreq": 70.0,
+    "sineFreqScale": [1.0, 1.588],
+    "sineInitLevel": [1.0, 0.0],
+    "sineSlowDownRate": 0.99992
+  },
+  "Claps": {
+    "initLevel": 5.0, "reverbInitLevel": 3.0,
+    "initDecay": 0.9925, "reverbDecay": 0.9995,
+    "filterCutoff": 1150.0, "filterQ": 2.2,
+    "unfilteredNoiseLevel": 0.03
+  },
+  "Reverb": {
+    "reverbLevel": 0.012, "mixerBaseDelay": 110.0, "diffuserCount": 3.0, "mixerChannels": 8.0, "filterCutoff": 2200.0
+  }
+}

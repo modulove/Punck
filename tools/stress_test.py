@@ -747,9 +747,9 @@ def main():
               "crashes,clip_db,peak_db,rate,i2s_restarts,flags,cycles\n")
     plog = open(os.path.join(out, "params.jsonl"), "w", buffering=1)
 
-    # engines per voice (firmware r23: snare 6 = string, toms 3 = pluck)
-    combos = [{"kick": k, "snare": s, "hats": h, "toms": t} for k in range(1, 6) for s in range(1, 7)
-              for h in range(1, 4) for t in range(1, 4)]
+    # engines per voice (r23: snare 6 = string, toms 3 = pluck; r25: snare 7 = bongo, toms 4-6 = FM / VA / fold)
+    combos = [{"kick": k, "snare": s, "hats": h, "toms": t} for k in range(1, 6) for s in range(1, 8)
+              for h in range(1, 4) for t in range(1, 7)]
     if a.only:                                                        # e.g. snare=6,toms=3: combos with ANY of these engines
         want = [kv.split("=") for kv in a.only.split(",")]
         combos = [c for c in combos if any(c[k] == int(v) for k, v in want)]

@@ -6,13 +6,14 @@
 #include "plaits/dsp/drums/synthetic_snare_drum.h"
 #include "plaits/dsp/physical_modelling/modal_drum.h"
 #include "KarplusString.h"
+#include "PlaitsSynth.h"
 
 class NoteMapper;
 
 
 class Snare : public DrumVoice {
 public:
-	enum Engine : uint8_t {classic = 0, analog, synthetic, rim, modal, karplus, engineCount};
+	enum Engine : uint8_t {classic = 0, analog, synthetic, rim, modal, karplus, bongo, engineCount};
 
 	void Play(const uint8_t voice, const uint32_t noteOffset, uint32_t noteRange, const float velocity, const float pitch);
 	void Play(const uint8_t voice, const uint32_t index);
@@ -71,6 +72,10 @@ private:
 	static constexpr float stringGain = 3.0f;		// output scaling: RMS of a hit matches the 808 snare (tools/hostsim)
 	static constexpr float maxStringDamping = 0.94f;	// 0.95+ sustains forever in Plaits: keep every hit finite
 
+	// Bongo engine: Mutable Instruments Plaits FM engine through its low-pass gate, internal envelope on pitch and FM
+	PlaitsSynth synth;
+	static constexpr float bongoGain = 1.0f;		// output scaling (tools/hostsim)
+
 	struct Config {
 		// Classic engine (upstream layout - keep order for the web editor)
 		float noiseInitLevel = 1.0f;
@@ -101,6 +106,14 @@ private:
 		float stringStructure = 0.25f;			// below 0.24 buzz (curved bridge), 0.25 clean string, up to 1 metallic / inharmonic
 		float stringStrings = 3.0f;				// Strings in rotation 1 - 3 (tails overlap; fewer = less CPU)
 		float stringLevel = 1.0f;				// Output trim
+
+		// Bongo engine: Plaits FM (Filter pot = FM amount / TIMBRE, Tuning = pitch, Decay = LPG decay)
+		float bongoRatio = 0.5f;				// Plaits HARMONICS: modulator ratio 0.5 ... 8 (quantised; 0.5 = 2:1)
+		float bongoFeedback = 0.5f;				// Plaits MORPH: < 0.5 phase feedback, 0.5 none, > 0.5 modulator self feedback
+		float bongoColour = 0.6f;				// LPG colour: 0 = dark VCF-like, 1 = bright VCA-like
+		float bongoPitchEnv = 0.2f;				// Internal envelope -> pitch (-1 .. 1; Plaits FM attenuverter)
+		float bongoFmEnv = 0.5f;				// Internal envelope -> FM amount (-1 .. 1; Plaits TIMBRE attenuverter)
+		float bongoLevel = 1.0f;				// Output trim
 	} config;
 
 	Filter<2> filter{filterPass::LowPass, &(ADC_array[ADC_SnareFilter])};		// Classic: filters partial and noise elements

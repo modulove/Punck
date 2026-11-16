@@ -240,14 +240,14 @@ void CDCHandler::ProcessCommand()
 
 	} else if (cmd.compare("status") == 0) {					// Switch position and sound engines
 		static constexpr const char* kickNames[] = {"classic", "deep", "punch", "fm", "rumble"};
-		static constexpr const char* snareNames[] = {"classic", "808", "909", "rim", "modal", "string"};
-		static constexpr const char* tomNames[] = {"toms", "bass", "pluck"};
+		static constexpr const char* snareNames[] = {"classic", "808", "909", "rim", "modal", "string", "bongo"};
+		static constexpr const char* tomNames[] = {"toms", "bass", "pluck", "fm", "va", "fold"};
 		static constexpr const char* hatNames[] = {"classic", "808", "909"};
 		printf("Switch: %s\r\n", voiceManager.ButtonModeName());
 		const uint8_t k = voiceManager.kickPlayer.GetEngine(), s = voiceManager.snarePlayer.GetEngine(), h = voiceManager.hihatPlayer.GetEngine();
 		const uint8_t t = voiceManager.tomsPlayer.GetEngine();
 		printf("Kick  engine %d (%s)\r\nSnare engine %d (%s)\r\nHats  engine %d (%s)\r\nToms  engine %d (%s)  (voice 6, MIDI only)\r\n",
-				k + 1, kickNames[k % 5], s + 1, snareNames[s % 6], h + 1, hatNames[h % 3], t + 1, tomNames[t % 3]);
+				k + 1, kickNames[k % 5], s + 1, snareNames[s % 7], h + 1, hatNames[h % 3], t + 1, tomNames[t % 6]);
 		printf("Buttons held:");
 		for (auto& nm : voiceManager.noteMapper) {
 			if (nm.trigger.ButtonHeld()) {

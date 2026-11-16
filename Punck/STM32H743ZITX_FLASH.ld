@@ -155,6 +155,7 @@ SECTIONS
     *main.o(.text .text*)
     *bpfilter.o(.text .text*)
     *karplusstring.o(.text .text*)
+    /* plaitssynth.o (Plaits FM / VA / Fold) runs from flash through the I-cache: ITCM is full */
     . = ALIGN(4);
     itcm_text_end = .;
   } >ITCMRAM AT> FLASH

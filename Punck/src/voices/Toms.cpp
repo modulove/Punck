@@ -27,7 +27,7 @@ static inline float PolyBlep(float t, const float dt)
 
 void Toms::Play(const uint8_t voice, const uint32_t noteOffset, const uint32_t noteRange, const float velocity, const float pitch)
 {
-	if (engine == bass || engine == pluck) {
+	if (engine != classic) {
 		if (noteRange == 0) {
 			noteRatio = pitch;							// Chromatic channel: remembered for the auto notes after each kick
 			Note(pitch, velocity);
@@ -92,10 +92,28 @@ void Toms::PluckNote(const float ratio, const float velocity)
 }
 
 
+void Toms::SynthNote(const float ratio, const float velocity)
+{
+	PlaitsSynth::Patch p;
+	p.harmonics = config.synthHarmonics;
+	p.timbre = config.synthTimbre;
+	p.morph = config.synthMorph;
+	p.decay = config.synthDecay;
+	p.colour = config.synthColour;
+	p.pitchEnv = config.synthPitchEnv;
+	p.timbreEnv = config.synthTimbreEnv;
+	p.morphEnv = config.synthMorphEnv;
+	const float hz = std::clamp(voiceManager.Tune(VoiceManager::toms, config.synthPitch * ratio), 8.0f, 12000.0f);
+	synth.Trigger(hz, std::clamp(velocity, 0.0f, 1.0f), p, static_cast<PlaitsSynth::Model>(engine - synthFm));
+	idle = false;
+	playing = true;
+}
+
+
 void Toms::KickPlayed(const float sixteenthSamples, const float velocity)
 {
 	// Auto bass / pluck notes on the 16ths after each kick (psytrance rolling bass, offbeat bass, dub stabs ...)
-	if (engine != bass && engine != pluck) {
+	if (engine == classic) {
 		return;
 	}
 	static constexpr uint8_t steps[6][3] = {{0, 0, 0}, {2, 0, 0}, {1, 2, 3}, {1, 2, 0}, {2, 3, 0}, {1, 3, 0}};
@@ -178,6 +196,14 @@ void Toms::CalcOutput()
 		}
 		return;
 	}
+	if (engine >= synthFm) {
+		outputLevel[0] = outputLevel[1] = config.synthLevel * synthGain * synth.Process();
+		if (!synth.Active()) {
+			idle = true;
+			playing = false;
+		}
+		return;
+	}
 	const float out = CalcBass();
 	outputLevel[0] = outputLevel[1] = out;
 	if (!ampAttack && ampEnv < 1e-5f) {
@@ -236,6 +262,7 @@ void Toms::SetEngine(const uint8_t e)
 	ampEnv = filterEnv = 0.0f;
 	ampAttack = false;
 	kString.Silence();
+	synth.Silence();
 	idle = true;
 	for (auto& c : followCountdown) {
 		c = -1;
@@ -263,6 +290,7 @@ void Toms::StoreConfig(uint8_t* buff, const uint32_t len)
 	if (buff == nullptr && !stringReady) {
 		kString.Init(stringBuffer);				// start-up only: clears the delay lines
 		stringReady = true;
+		synth.Init();
 	}
 	if (buff != nullptr && len <= sizeof(config)) {
 		memcpy(&config, buff, len);

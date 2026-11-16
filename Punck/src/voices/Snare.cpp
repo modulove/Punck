@@ -68,6 +68,18 @@ void Snare::Play(const uint8_t voice, const uint32_t noteOffset, uint32_t noteRa
 		wireBp.set_f_q<stmlib::FREQUENCY_FAST>(std::clamp(config.modalWireTone, 500.0f, 12000.0f) / systemSampleRate, 1.2f);
 	}
 
+	if (engine == bongo) {
+		PlaitsSynth::Patch p;
+		p.harmonics = config.bongoRatio;
+		p.timbre = snappy;
+		p.morph = config.bongoFeedback;
+		p.decay = decayEff;
+		p.colour = config.bongoColour;
+		p.pitchEnv = config.bongoPitchEnv;
+		p.timbreEnv = config.bongoFmEnv;
+		synth.Trigger(hz, accent, p, PlaitsSynth::fm);
+	}
+
 	if (engine == karplus && stringReady) {
 		// Filter pot = brightness (Plaits: timbre squared), decay = damping
 		kString.Strike(f0, accent, std::clamp(config.stringStructure, 0.0f, 1.0f), snappy * snappy,
@@ -165,6 +177,10 @@ void Snare::CalcOutput()
 		out = config.stringLevel * stringGain * kString.Process();
 		break;
 
+	case bongo:
+		out = config.bongoLevel * bongoGain * synth.Process();
+		break;
+
 	default:
 		break;
 	}
@@ -199,6 +215,7 @@ void Snare::SetEngine(const uint8_t e)
 		wireEnv = 0.0f;
 	}
 	kString.Silence();
+	synth.Silence();
 	rimEnv[0] = rimEnv[1] = clickEnv = 0.0f;
 	idle = false;
 	quietCount = 0;
@@ -230,6 +247,7 @@ void Snare::StoreConfig(uint8_t* buff, const uint32_t len)
 		modalReady = true;
 		kString.Init(stringBuffer);
 		stringReady = true;
+		synth.Init();
 	}
 	if (buff != nullptr && len <= sizeof(config)) {
 		memcpy(&config, buff, len);

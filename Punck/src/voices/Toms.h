@@ -4,12 +4,13 @@
 #include "DrumVoice.h"
 #include "stmlib/dsp/filter.h"
 #include "KarplusString.h"
+#include "PlaitsSynth.h"
 
 class NoteMapper;
 
 class Toms : public DrumVoice {
 public:
-	enum Engine : uint8_t {classic = 0, bass, pluck, engineCount};
+	enum Engine : uint8_t {classic = 0, bass, pluck, synthFm, synthVa, synthFold, engineCount};
 
 	void Play(const uint8_t voice, const uint32_t noteOffset, const uint32_t noteRange, const float velocity, const float pitch);
 	void Play(const uint8_t voice, const uint32_t index);
@@ -31,7 +32,10 @@ private:
 	float CalcBass();
 	void BassNote(const float ratio, const float velocity);
 	void PluckNote(const float ratio, const float velocity);
-	void Note(const float ratio, const float velocity) { if (engine == pluck) PluckNote(ratio, velocity); else BassNote(ratio, velocity); }
+	void SynthNote(const float ratio, const float velocity);
+	void Note(const float ratio, const float velocity) {
+		if (engine == pluck) PluckNote(ratio, velocity); else if (engine >= synthFm) SynthNote(ratio, velocity); else BassNote(ratio, velocity);
+	}
 
 	enum class Phase {Off, Ramp, Sine} phase;
 	static constexpr uint8_t partialCount = 2;
@@ -62,6 +66,10 @@ private:
 	bool stringReady = false;
 	static constexpr float stringGain = 1.0f;			// output scaling (tools/hostsim)
 	static constexpr float maxStringDamping = 0.94f;	// 0.95+ sustains forever in Plaits: keep every note finite
+
+	// Synth engines: Mutable Instruments Plaits FM / VA / waveshaping through its low-pass gate
+	PlaitsSynth synth;
+	static constexpr float synthGain = 1.0f;			// output scaling (tools/hostsim)
 
 	struct Config {
 		float decaySpeed[partialCount] = {0.9995f, 0.9993f};	// Volume decay speed
@@ -94,6 +102,18 @@ private:
 		float pluckStructure = 0.25f;			// below 0.24 buzz (curved bridge), 0.25 clean string, up to 1 metallic / inharmonic
 		float pluckStrings = 3.0f;				// Strings in rotation 1 - 3 (tails overlap; fewer = less CPU)
 		float pluckLevel = 1.0f;				// Output level
+
+		// modulove: Plaits synth engines FM / VA / Fold (same notes as the bass; one set of knobs like on Plaits)
+		float synthPitch = 130.81f;				// Hz at chromatic note 60 and for drum map / auto notes (C3)
+		float synthHarmonics = 0.5f;			// Plaits HARMONICS (FM ratio / VA detune / fold waveshaper)
+		float synthTimbre = 0.5f;				// Plaits TIMBRE (FM amount / square + sync / fold amount)
+		float synthMorph = 0.5f;				// Plaits MORPH (FM feedback / saw shape / slope asymmetry)
+		float synthDecay = 0.5f;				// LPG decay 0 - 1
+		float synthColour = 0.5f;				// LPG colour: 0 = dark VCF-like, 1 = bright VCA-like
+		float synthPitchEnv = 0.0f;				// Internal envelope -> pitch (-1 .. 1)
+		float synthTimbreEnv = 0.3f;			// Internal envelope -> TIMBRE (-1 .. 1)
+		float synthMorphEnv = 0.0f;				// Internal envelope -> MORPH (-1 .. 1)
+		float synthLevel = 1.0f;				// Output level
 	} config;
 
 };

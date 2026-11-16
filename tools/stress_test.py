@@ -439,10 +439,23 @@ def restore_snapshot(mod, snap, log):
         log(f"restore check: {wrong} differ, writing again")
         time.sleep(2.0)
     if "mix_raw" in snap:
-        mod.write_mix_raw(bytes.fromhex(snap["mix_raw"]))         # master bus over SysEx
+        for attempt in range(4):
+            mod.write_mix_raw(bytes.fromhex(snap["mix_raw"]))     # master bus over SysEx
+            time.sleep(0.3)
+            try:
+                if mod.read_mix_raw().hex() == snap["mix_raw"]:
+                    break
+            except Exception as e:
+                log(f"mix read back failed: {e}")
+            log("restore check: mix differs, writing again")
+            time.sleep(2.0)
     else:
         set_mix(mod, snap["mix"])                                 # older snapshots: console
-    log(f"settings restored from snapshot ({len(snap['structs'])} configs, {len(snap['mix'])} mix values)")
+    # 2026-11-16: the restored settings lived only in RAM - the next boot (a flash) loaded the last random set that
+    # autosave had written during the run. Save explicitly so the restored state is what the module boots with.
+    mod.midi_call(lambda: mod.sx.send([pb.CMD["SaveConfig"], 0]))
+    time.sleep(1.5)
+    log(f"settings restored from snapshot and saved to flash ({len(snap['structs'])} configs, {len(snap['mix'])} mix values)")
 
 
 def apply_values(mod, tl, combo, values, snap):

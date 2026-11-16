@@ -48,6 +48,16 @@ public:
 		noteQueued[slot] = true;
 	}
 
+	// Audio interrupt (VoiceManager::StartOneHit): plays the note queued in one slot (slot = voice index), if any
+	bool PlayQueuedSlot(const uint8_t slot) {
+		if (slot >= queueSlots || !noteQueued[slot]) {
+			return false;
+		}
+		Play(queuedNote[slot].voice, queuedNote[slot].noteOffset, queuedNote[slot].noteRange, queuedNote[slot].velocity, queuedNote[slot].pitch);
+		noteQueued[slot] = false;
+		return true;
+	}
+
 	// Called in main interrupt to check if queued note should be played
 	void PlayQueued() {
 		for (uint8_t s = 0; s < queueSlots; ++s) {

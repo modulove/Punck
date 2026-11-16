@@ -10,6 +10,8 @@ volatile uint32_t SysTickVal;		// 1 ms resolution
 uint32_t i2sUnderrun = 0;				// Debug counter for I2S underruns
 CpuLoad cpuLoad;
 extern uint32_t SystemCoreClock;
+volatile CrashRecord __attribute__((section (".noinit"))) crashRecord;	// survives the reset after a fault
+uint32_t resetFlags = 0;
 
 void InitCycleCounter()
 {
@@ -39,6 +41,14 @@ extern "C" {
 
 
 int main(void) {
+
+	resetFlags = RCC->RSR;			// Reset reason (power on, brownout, pin, software / fault restart, watchdog)
+	RCC->RSR |= RCC_RSR_RMVF;		// Clear the flags so the next reset shows only its own reason
+	if (crashRecord.magic != crashMagic) {
+		crashRecord.magic = crashMagic;			// first boot after power on: RAM content is random
+		crashRecord.count = 0;
+		crashRecord.type = 0;
+	}
 
 	InitClocks();					// Configure the clock and PLL
 	InitHardware();

@@ -49,7 +49,7 @@ def main():
                             "-strftime", "1", os.path.join(folder, "seg_%H%M%S.flac")],
                            stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=open(os.path.join(folder, "ffmpeg.log"), "w"))
     csv = open(os.path.join(folder, "monitor.csv"), "w", buffering=1)
-    csv.write("time,uptime_s,cpu_avg,cpu_max,underruns,pots_read,max_jitter_pct,max_jitter_pot,pots\n")
+    csv.write("time,uptime_s,cpu_avg,cpu_max,underruns,pots_read,max_jitter_pct,max_jitter_pot,pots,cycles\n")
     print(f"Monitoring into {folder}  (Ctrl+C to stop)", flush=True)
 
     p, t0, last_under = None, time.time(), None
@@ -62,11 +62,13 @@ def main():
                 cpu = p.cmd("cpu", wait=0.4)
                 m = re.search(r"CPU avg: ([\d.]+)%\s+max: ([\d.]+)%\s+underruns: (\d+)", cpu)
                 avg, mx, under = (float(m.group(1)), float(m.group(2)), int(m.group(3))) if m else (None, None, None)
+                cy = re.search(r"budget \d+\):(.*)", cpu)				# per-block cycles avg/max (firmware r9+)
+                cycles = cy.group(1).strip().replace(",", " ") if cy else ""
                 r1, r2 = read_pots(p), read_pots(p)
                 common = [k for k in r1 if k in r2]
                 jit = max(((abs(r1[k] - r2[k]), k) for k in common), default=(0.0, "-"))
                 pots = ";".join(f"{k}={r1[k]:.1f}" for k in sorted(r1))
-                csv.write(f"{now},{time.time() - t0:.0f},{avg},{mx},{under},{len(common)},{jit[0]:.2f},{jit[1]},{pots}\n")
+                csv.write(f"{now},{time.time() - t0:.0f},{avg},{mx},{under},{len(common)},{jit[0]:.2f},{jit[1]},{pots},{cycles}\n")
                 flag = ""
                 if under is not None and last_under is not None and under > last_under:
                     flag += f"  UNDERRUNS +{under - last_under}"

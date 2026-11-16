@@ -99,6 +99,7 @@ public:
 	float SixteenthSamples();									// Tempo for synced effects: MIDI clock > sequencer > kick interval
 	void Output();
 	void CheckButtons();
+	void StartOneHit();
 	void IdleTasks();
 	void SetAllLeds(float val);
 	void RestoreAllLeds();

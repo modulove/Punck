@@ -75,18 +75,42 @@ void UART8_IRQHandler(void) {
 // System interrupts
 void NMI_Handler(void) {}
 
-void HardFault_Handler(void) {
-	while (1) {}
+// modulove: faults record where they happened (crashRecord in .noinit, kept over the reset) and restart the module
+// instead of hanging silently. frame = the stacked exception frame (r0-r3, r12, lr, pc, xpsr).
+__attribute__((used, noinline)) void FaultRecord(const uint32_t* frame, const uint32_t type)
+{
+	if (crashRecord.magic != crashMagic) {
+		crashRecord.magic = crashMagic;
+		crashRecord.count = 0;
+	}
+	++crashRecord.count;
+	crashRecord.type = type;
+	crashRecord.pc = frame[6];
+	crashRecord.lr = frame[5];
+	crashRecord.cfsr = SCB->CFSR;
+	crashRecord.hfsr = SCB->HFSR;
+	crashRecord.mmfar = SCB->MMFAR;
+	crashRecord.bfar = SCB->BFAR;
+	crashRecord.uptimeMs = SysTickVal;
+	__DSB();
+	NVIC_SystemReset();
 }
-void MemManage_Handler(void) {
-	while (1) {}
-}
-void BusFault_Handler(void) {
-	while (1) {}
-}
-void UsageFault_Handler(void) {
-	while (1) {}
-}
+
+// Pass the active stack pointer (MSP or PSP, from EXC_RETURN bit 2) and the fault type to FaultRecord
+#define FAULT_HANDLER(name, type) \
+	__attribute__((naked)) void name(void) { \
+		__asm volatile("tst lr, #4      \n" \
+					   "ite eq          \n" \
+					   "mrseq r0, msp   \n" \
+					   "mrsne r0, psp   \n" \
+					   "movs r1, #" #type " \n" \
+					   "b FaultRecord   \n"); \
+	}
+
+FAULT_HANDLER(HardFault_Handler, 1)
+FAULT_HANDLER(MemManage_Handler, 2)
+FAULT_HANDLER(BusFault_Handler, 3)
+FAULT_HANDLER(UsageFault_Handler, 4)
 
 void SVC_Handler(void) {}
 

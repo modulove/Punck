@@ -94,6 +94,7 @@ void VoiceManager::Output()
 	const uint32_t controlCycles = DWT->CYCCNT;			// trigger inputs, buttons, sequencer: includes the per-hit setup they start
 	CheckButtons();										// Handle buttons playing note or activating MIDI learn
 	sequencer.Play();
+	StartOneHit();										// one hit per sample from trigger inputs, buttons, MIDI, sequencer, console
 	Profile(profControl, DWT->CYCCNT - controlCycles);
 
 /*
@@ -204,8 +205,7 @@ void VoiceManager::Output()
 #if (TIMINGDEBUG)
 			uint32_t debugStart = TIM3->CNT;
 #endif
-			const uint32_t voiceCycles = DWT->CYCCNT;			// voice profile includes the per-hit setup of queued notes
-			nm.drumVoice->PlayQueued();			// MIDI notes will be queued from serial/usb interrupts to play in main I2S interrupt
+			const uint32_t voiceCycles = DWT->CYCCNT;			// queued notes are started by StartOneHit (control profile)
 			nm.drumVoice->CalcOutput();
 			Profile(nm.voice, DWT->CYCCNT - voiceCycles);
 #if (TIMINGDEBUG)
@@ -409,16 +409,31 @@ void VoiceManager::CheckButtons()
 		CheckLongPress(note);
 	}
 
-	// Start at most one waiting hit per sample (round robin): simultaneous triggers on all inputs would otherwise set
-	// up every voice in the same sample and overrun it. The last of five simultaneous hits starts 4 samples (83 us) late.
+}
+
+
+void VoiceManager::StartOneHit()
+{
+	// At most one hit is set up per sample, from any source: trigger inputs and buttons (pendingPlay), MIDI, sequencer
+	// and console (queued notes). Several voices starting in the same sample would add up their per-hit setup and
+	// overrun it. Round robin over the voices: the last of seven simultaneous hits starts 6 samples (125 us) late.
 	for (uint32_t i = 0; i < Voice::count; ++i) {
 		const uint32_t v = (playTurn + i) % Voice::count;
 		NoteMapper& note = noteMapper[v];
+		if (note.drumVoice == nullptr) {
+			continue;
+		}
+		bool started = false;
 		if (note.pendingPlay >= 0) {
 			note.drumVoice->Play(note.voiceIndex, static_cast<uint32_t>(note.pendingPlay));
 			note.pendingPlay = -1;
+			started = true;
+		} else {
+			started = note.drumVoice->PlayQueuedSlot(note.voiceIndex);
+		}
+		if (started) {
 			playTurn = static_cast<uint8_t>((v + 1) % Voice::count);
-			break;
+			return;
 		}
 	}
 }
@@ -497,7 +512,7 @@ void VoiceManager::ShowBlinks()
 			nm.pwmLed.Level(0.0f);
 			if (blinkPreview[v]) {
 				blinkPreview[v] = false;
-				nm.drumVoice->Play(nm.voiceIndex, 0);				// Preview the new engine
+				nm.pendingPlay = 0;									// Preview the new engine (started by StartOneHit)
 			}
 		} else {
 			nm.pwmLed.Level((elapsed % blinkPeriodMs) < blinkOnMs ? 1.0f : 0.0f);

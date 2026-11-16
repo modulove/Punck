@@ -8,6 +8,15 @@
 
 extern volatile uint32_t SysTickVal;
 
+// modulove: a fault (hard / memory / bus / usage) records where it happened and restarts the module instead of
+// hanging. The record lives in .noinit (not cleared at start-up) so it survives the reset; console 'crash' shows it.
+struct CrashRecord {
+	uint32_t magic, count, type, pc, lr, cfsr, hfsr, mmfar, bfar, uptimeMs;
+};
+static constexpr uint32_t crashMagic = 0x43524153;		// 'CRAS'
+extern volatile CrashRecord crashRecord;
+extern uint32_t resetFlags;								// RCC->RSR at boot (reset reason)
+
 #define TIMINGDEBUG false					// Capture detailed timing information
 
 #define ADC1_BUFFER_LENGTH 8

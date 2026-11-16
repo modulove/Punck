@@ -109,6 +109,7 @@ void CDCHandler::ProcessCommand()
 				"mix         -  Show master bus (compressor, clipper) and ducking settings\r\n"
 				"mix:i,v     -  Set mix setting i to value v (saveconfig to keep)\r\n"
 				"cpu         -  Audio CPU load and compressor / clipper meter\r\n"
+				"crash       -  Reset reason and last fault (the module restarts after a fault); crash:0 clears\r\n"
 				"status      -  Switch position, sound engines, held buttons\r\n"
 				"pots        -  Pot positions\r\n"
 				"cfg         -  Settings storage info (settings save automatically 3 s after a change)\r\n"
@@ -179,10 +180,37 @@ void CDCHandler::ProcessCommand()
 		printf("I2C Underrun: %ld\r\n", i2sUnderrun);
 #endif
 
+	} else if (cmd.compare("crash") == 0 || cmd.compare("crash:0") == 0) {	// Last fault (restart) and reset reason
+		const uint32_t r = resetFlags;
+		printf("Reset reason:%s%s%s%s%s%s%s\r\n", (r & RCC_RSR_PORRSTF) ? " power-on" : "", (r & RCC_RSR_BORRSTF) ? " brownout" : "",
+				(r & RCC_RSR_PINRSTF) ? " pin" : "", (r & RCC_RSR_SFTRSTF) ? " software/fault" : "",
+				(r & RCC_RSR_IWDG1RSTF) ? " watchdog" : "", (r & RCC_RSR_WWDG1RSTF) ? " window-watchdog" : "",
+				(r & RCC_RSR_LPWRRSTF) ? " low-power" : "");
+		static constexpr const char* types[] = {"-", "hard fault", "memory fault", "bus fault", "usage fault"};
+		printf("Faults since power on: %lu", crashRecord.count);
+		if (crashRecord.count > 0) {
+			printf("  last: %s at pc 0x%08lx lr 0x%08lx after %lu ms  CFSR 0x%08lx HFSR 0x%08lx MMFAR 0x%08lx BFAR 0x%08lx",
+					types[crashRecord.type < 5 ? crashRecord.type : 0], crashRecord.pc, crashRecord.lr, crashRecord.uptimeMs,
+					crashRecord.cfsr, crashRecord.hfsr, crashRecord.mmfar, crashRecord.bfar);
+		}
+		printf("\r\n");
+		if (cmd.compare("crash:0") == 0) {
+			crashRecord.count = 0;
+			crashRecord.type = 0;
+			printf("Fault record cleared\r\n");
+		}
+
+	} else if (cmd.compare("crashtest") == 0) {					// Deliberate fault: checks that the module records it and restarts
+		printf("Faulting now: the module restarts, then 'crash' shows the record\r\n");
+		const uint32_t start = SysTickVal;
+		while (SysTickVal - start < 50) {}						// let the line go out over USB first
+		__builtin_trap();
+
 	} else if (cmd.compare("cpu") == 0) {						// Audio CPU load and master bus meter
 		VoiceManager::Meter m;
 		voiceManager.GetMeter(m);
-		printf("CPU avg: %.1f%%  max: %.1f%%  underruns: %lu\r\n", m.cpuAvg, m.cpuMax, i2sUnderrun);
+		printf("CPU avg: %.1f%%  max: %.1f%%  underruns: %lu  uptime: %lu s  crashes: %lu\r\n", m.cpuAvg, m.cpuMax, i2sUnderrun,
+				SysTickVal / 1000, crashRecord.count);
 		printf("Comp reduction max: %.1f dB  into clipper: %+.1f dB  output peak: %+.1f dBFS\r\n", m.reductionDb, m.clipDb, m.peakDb);
 		static constexpr const char* blocks[] = {"kick", "snare", "hats", "samples", "-", "toms", "claps", "reverb", "master", "trig"};
 		printf("Cycles avg/max per sample (budget 8333):");

@@ -99,6 +99,7 @@ void USB::InterruptHandler()					// In Drivers\STM32F4xx_HAL_Driver\Src\stm32f4x
 
 						ep0State = EP0State::Idle;
 						USBx_OUTEP(epnum)->DOEPCTL |= USB_OTG_DOEPCTL_STALL;
+						EP0OutStart();			// modulove: data / status OUT stage done: ready for the next SETUP
 					} else {
 						// Call appropriate data handler depending on endpoint of data
 						if (classByEP[epnum]->outBuffPackets <= 1) {
@@ -142,7 +143,7 @@ void USB::InterruptHandler()					// In Drivers\STM32F4xx_HAL_Driver\Src\stm32f4x
 						break;
 					}
 
-					USBx_OUTEP(epnum)->DOEPINT = USB_OTG_DOEPINT_STUP;				// Clear interrupt
+					USBx_OUTEP(epnum)->DOEPINT = USB_OTG_DOEPINT_STUP | USB_OTG_DOEPINT_STPKTRX;	// Clear interrupt (STPKTRX as in ST's HAL)
 				}
 
 				if ((epint & USB_OTG_DOEPINT_OTEPDIS) == USB_OTG_DOEPINT_OTEPDIS) {	// OUT token received when endpoint disabled
@@ -193,6 +194,8 @@ void USB::InterruptHandler()					// In Drivers\STM32F4xx_HAL_Driver\Src\stm32f4x
 							USBUpdateDbg({}, {}, {}, ep0.inBuffSize, {}, (uint32_t*)ep0.inBuff);
 
 							EPStartXfer(Direction::in, 0, ep0.inBuffSize);
+						} else {
+							EP0OutStart();		// modulove: status stage (zero length IN) done: ready for the next SETUP
 						}
 					} else {
 						classByEP[epnum]->DataIn();
@@ -781,6 +784,18 @@ void USB::EPStartXfer(const Direction direction, uint8_t endpoint, uint32_t xfer
 		USBx_OUTEP(endpoint)->DOEPTSIZ |= (USB_OTG_DOEPTSIZ_XFRSIZ & xfer_len);
 
 		USBx_OUTEP(endpoint)->DOEPCTL |= (USB_OTG_DOEPCTL_CNAK | USB_OTG_DOEPCTL_EPENA);		// EP enable
+	}
+}
+
+
+// modulove: ready EP0 for the next SETUP after every completed control transfer, as ST's HAL does (USB_EP0_OutStart,
+// slave mode): PKTCNT 1, XFRSIZ 3 x 8, STUPCNT 3 - not while EP0 OUT is armed for a data or status stage. Upstream did
+// this only at bus reset, so the SETUP counter ran down: in the stress test STUPCNT read 0 and a received SETUP was never
+// processed, after which opening the COM port hung until the module was restarted.
+void USB::EP0OutStart()
+{
+	if ((USBx_OUTEP(0)->DOEPCTL & USB_OTG_DOEPCTL_EPENA) == 0) {
+		USBx_OUTEP(0)->DOEPTSIZ = (1U << 19) | (3U * 8U) | USB_OTG_DOEPTSIZ_STUPCNT;
 	}
 }
 

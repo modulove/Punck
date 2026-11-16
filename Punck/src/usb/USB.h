@@ -89,6 +89,7 @@ private:
 	void EPStartXfer(const Direction direction, uint8_t endpoint, uint32_t xfer_len);
 	void EP0In(const uint8_t* buff, uint32_t size);
 	void AbortEP0In();
+	void EP0OutStart();
 	void CtlError();
 	bool ReadInterrupts(const uint32_t interrupt);
 	uint32_t MakeConfigDescriptor();

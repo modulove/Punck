@@ -10,8 +10,13 @@ void Claps::Play(const uint8_t voice, const uint32_t noteOffset, uint32_t noteRa
 	state = State::hit1;
 	stateCounter = 0;
 
-	const float omega = std::min(2.0f * config.filterCutoff * pitch / systemSampleRate, 0.95f);		// omega = cutoff in Hz / half sampling frequency
-	filter.CalcCoeff(omega, config.filterQ);
+	// modulove: band pass kept between 80 Hz and 18 kHz (Q 0.3 - 20) and started from rest on every hit. Chromatic
+	// notes moved the cutoff from ~40 Hz to 22 kHz while the previous clap still rang, and the old filter state then
+	// excited the new narrow resonator: up to +37 dB into the master bus on the module, +56 dB in an offline test
+	// (stress test 2026-11-16). A clap starts from noise, so clearing the state is inaudible.
+	const float omega = std::clamp(2.0f * config.filterCutoff * pitch / systemSampleRate, 2.0f * 80.0f / systemSampleRate, 0.75f);
+	filter.CalcCoeff(omega, std::clamp(config.filterQ, 0.3f, 20.0f));	// omega = cutoff in Hz / half sampling frequency
+	iirReg.Init();
 }
 
 
